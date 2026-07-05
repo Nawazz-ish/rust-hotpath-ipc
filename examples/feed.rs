@@ -79,18 +79,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("waiting 2s for the strategy to attach...");
     thread::sleep(Duration::from_secs(2));
 
-    // Mean-reverting random walk around a fair value, in fixed-point (1e8 scale).
+    // Regime-switching price model in fixed-point (1e8 scale): the series
+    // alternates between trending regimes (a persistent drift) and choppy
+    // mean-reverting regimes, so there is real structure for the strategy to
+    // trade rather than pure noise around a fixed level. VOL scales the shocks.
     let mut rng = Rng::new(seed);
-    let fair = 50_000.0_f64; // e.g. BTC-USD
-    let mut price = fair;
-    let kappa = 0.02; // reversion speed toward fair
-    let vol = 8.0; // per-tick shock size
+    let mut price = 50_000.0_f64; // e.g. BTC-USD
+    let vol: f64 = env::var("VOL")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6.0);
+
+    // Regime state: drift (price units per tick) and how long it lasts.
+    let mut drift = 0.0_f64;
+    let mut regime_left: u64 = 0;
 
     let mut seq = 0u64;
     loop {
         seq += 1;
-        // dP = kappa*(fair - P) + vol*N(0,1)
-        price += kappa * (fair - price) + vol * rng.normal();
+
+        // Occasionally pick a new regime: a trend (up or down) or a flat/choppy
+        // stretch. Trends have a steady drift; flat stretches drift ~0.
+        if regime_left == 0 {
+            let roll = rng.unit();
+            drift = if roll < 0.35 {
+                vol * (0.15 + 0.25 * rng.unit()) // up-trend
+            } else if roll < 0.70 {
+                -vol * (0.15 + 0.25 * rng.unit()) // down-trend
+            } else {
+                0.0 // choppy / flat
+            };
+            regime_left = 2_000 + (rng.next_u64() % 6_000); // 2k-8k ticks
+        }
+        regime_left -= 1;
+
+        // dP = drift + vol * N(0,1), with a gentle pull back toward a wide band
+        // so price stays in a sane range over long runs.
+        let pull = (50_000.0 - price) * 0.0005;
+        price += drift + pull + vol * rng.normal();
         if price < 1.0 {
             price = 1.0;
         }

@@ -66,11 +66,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_or_create()?;
     let orders = orders_svc.publisher_builder().create()?;
 
-    let mut strat = Strategy::new(StrategyConfig::default());
+    // Threshold is env-tunable so the same binary works across feeds of
+    // different volatility without a rebuild.
+    let mut cfg = StrategyConfig::default();
+    if let Some(t) = env::var("THRESHOLD").ok().and_then(|v| v.parse().ok()) {
+        cfg.threshold = t;
+    }
+    let mut strat = Strategy::new(cfg);
 
     println!("strategy: consuming MarketTick, emitting OrderCommand");
     println!("  in:  {}", MARKET_SERVICE);
     println!("  out: {}", ORDER_SERVICE);
+    println!("  threshold: {:+.3}", cfg.threshold);
 
     let mut ticks_seen = 0u64;
     let mut orders_sent = 0u64;
@@ -89,6 +96,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Fixed-point (1e8) wire price -> f64 for the strategy math.
         let price = tick.price as f64 / 100_000_000.0;
+
+        // Periodic heartbeat so the demo shows the strategy is alive and what
+        // the signals look like even during quiet stretches.
+        if ticks_seen % 50_000 == 0 {
+            let (trend, mom, rev) = strat.signals();
+            println!(
+                "  .. {} ticks, px={:.2}  signals[trend={:+.2} mom={:+.2} rev={:+.2}]  orders={}",
+                ticks_seen, price, trend, mom, rev, orders_sent
+            );
+        }
 
         if let Decision::Trade { side, score } = strat.on_price(price) {
             order_id += 1;
