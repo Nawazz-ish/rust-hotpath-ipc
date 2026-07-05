@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strategy Builder — rust-hotpath-ipc</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2230; --line: #30363d;
+    --ink: #e6edf3; --muted: #8b949e; --accent: #2f81f7; --green: #3fb950;
+    --red: #f85149; --amber: #d29922; --wire: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; }
+  #app { display: grid; grid-template-columns: 200px 1fr 340px; grid-template-rows: 44px 1fr;
+    grid-template-areas: "head head head" "palette canvas side"; height: 100vh; }
+  header { grid-area: head; display: flex; align-items: center; gap: 14px;
+    padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .tag { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  button { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 12px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.danger { background: #3d1418; border-color: var(--red); color: #ff9b93; }
+
+  #palette { grid-area: palette; border-right: 1px solid var(--line); background: var(--panel);
+    padding: 12px; overflow-y: auto; }
+  #palette h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--muted); margin: 14px 0 8px; }
+  #palette h2:first-child { margin-top: 0; }
+  .pnode { background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 7px 10px; margin-bottom: 7px; cursor: grab; font-size: 12px; }
+  .pnode:active { cursor: grabbing; }
+  .pnode.ind { border-left-color: #a371f7; }
+  .pnode.cond { border-left-color: var(--amber); }
+  .pnode.logic { border-left-color: #56d364; }
+  .pnode.sig { border-left-color: var(--green); }
+  .pnode.data { border-left-color: var(--accent); }
+
+  #canvasWrap { grid-area: canvas; position: relative; overflow: hidden; background:
+    radial-gradient(circle at 1px 1px, #21262d 1px, transparent 0) 0 0 / 22px 22px, var(--bg); }
+  #edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .node { position: absolute; width: 148px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); user-select: none; }
+  .node .title { padding: 6px 9px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--line);
+    border-radius: 8px 8px 0 0; cursor: move; display: flex; justify-content: space-between; align-items: center; }
+  .node .title .x { color: var(--muted); cursor: pointer; font-weight: 400; }
+  .node .body { padding: 7px 9px; font-size: 11px; color: var(--muted); }
+  .node .body label { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin: 3px 0; }
+  .node .body input, .node .body select { width: 68px; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; font-size: 11px; }
+  .port { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--panel2);
+    border: 2px solid var(--wire); cursor: crosshair; }
+  .port.in { left: -7px; top: 14px; }
+  .port.out { right: -7px; top: 14px; }
+  .node.ind .title { color: #d2a8ff; }
+  .node.cond .title { color: #e3b341; }
+  .node.logic .title { color: #7ee787; }
+  .node.sig .title { color: #56d364; }
+
+  #side { grid-area: side; border-left: 1px solid var(--line); background: var(--panel);
+    display: flex; flex-direction: column; }
+  #side .sec { padding: 12px; border-bottom: 1px solid var(--line); }
+  #side h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 0 0 8px; }
+  .krow { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; font-size: 12px; }
+  .krow input[type=range] { width: 130px; }
+  .krow .val { color: var(--accent); font-variant-numeric: tabular-nums; width: 44px; text-align: right; }
+  #console { flex: 1; overflow-y: auto; padding: 10px 12px; font: 11px/1.45 ui-monospace, Menlo, monospace;
+    background: #0a0e14; }
+  .ln { white-space: pre-wrap; margin: 1px 0; }
+  .ln.feed { color: #6e7681; }
+  .ln.strat { color: #79c0ff; }
+  .ln.exec { color: #7ee787; }
+  .ln.buy { color: var(--green); }
+  .ln.sell { color: #ff7b72; }
+  .ln.ctrl { color: var(--amber); }
+  .ln.pnl { color: #fff; font-weight: 600; }
+  #stats { display: flex; gap: 14px; padding: 8px 12px; border-bottom: 1px solid var(--line);
+    font-variant-numeric: tabular-nums; }
+  #stats .stat { flex: 1; }
+  #stats .stat .k { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+  #stats .stat .v { font-size: 16px; font-weight: 600; }
+  .conn-hint { position: fixed; bottom: 8px; left: 210px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Strategy Builder</h1>
+    <span class="tag">→ configures the live Rust hot-path pipeline</span>
+    <span class="spacer"></span>
+    <button id="loadSample">Load sample</button>
+    <button id="exportBtn">Export JSON</button>
+    <button id="runBtn" class="primary">▶ Run pipeline</button>
+    <button id="stopBtn" class="danger">■ Stop</button>
+  </header>
+
+  <aside id="palette">
+    <h2>Data</h2>
+    <div class="pnode data" draggable="true" data-type="data_source">Market Data</div>
+    <h2>Indicators</h2>
+    <div class="pnode ind" draggable="true" data-type="ema">EMA</div>
+    <div class="pnode ind" draggable="true" data-type="momentum">Momentum</div>
+    <div class="pnode ind" draggable="true" data-type="reversion">Mean Reversion</div>
+    <h2>Conditions</h2>
+    <div class="pnode cond" draggable="true" data-type="condition">Threshold</div>
+    <h2>Logic</h2>
+    <div class="pnode logic" draggable="true" data-type="and_gate">AND gate</div>
+    <div class="pnode logic" draggable="true" data-type="or_gate">OR gate</div>
+    <h2>Signals</h2>
+    <div class="pnode sig" draggable="true" data-type="buy_signal">Buy Signal</div>
+    <div class="pnode sig" draggable="true" data-type="sell_signal">Sell Signal</div>
+  </aside>
+
+  <div id="canvasWrap">
+    <svg id="edges"></svg>
+    <div class="conn-hint">Drag a node's right port onto another node's left port to wire them.</div>
+  </div>
+
+  <div id="side">
+    <div class="sec">
+      <h2>Strategy parameters</h2>
+      <div class="krow"><span>Trend weight</span><input id="w_trend" type="range" min="0" max="1" step="0.05" value="0.5"><span class="val" id="w_trend_v">0.50</span></div>
+      <div class="krow"><span>Momentum weight</span><input id="w_mom" type="range" min="0" max="1" step="0.05" value="0.3"><span class="val" id="w_mom_v">0.30</span></div>
+      <div class="krow"><span>Reversion weight</span><input id="w_rev" type="range" min="0" max="1" step="0.05" value="0.2"><span class="val" id="w_rev_v">0.20</span></div>
+      <div class="krow"><span>Signal threshold</span><input id="thr" type="range" min="0.1" max="0.6" step="0.01" value="0.25"><span class="val" id="thr_v">0.25</span></div>
+      <div class="krow"><span>Max position</span><input id="maxpos" type="range" min="1" max="10" step="1" value="3"><span class="val" id="maxpos_v">3</span></div>
+      <div class="krow"><span>Feed volatility</span><input id="vol" type="range" min="2" max="16" step="1" value="8"><span class="val" id="vol_v">8</span></div>
+    </div>
+    <div id="stats">
+      <div class="stat"><div class="k">Orders</div><div class="v" id="s_orders">0</div></div>
+      <div class="stat"><div class="k">Position</div><div class="v" id="s_pos">0</div></div>
+      <div class="stat"><div class="k">P&amp;L</div><div class="v" id="s_pnl">—</div></div>
+    </div>
+    <div id="console"></div>
+  </div>
+</div>
+
+<script>
+// ---------- node model ----------
+const NODE_META = {
+  data_source:  { label: "Market Data", cls: "data",  props: { symbol: "BTC/USDT" } },
+  ema:          { label: "EMA",          cls: "ind",   props: { period: 12 } },
+  momentum:     { label: "Momentum",     cls: "ind",   props: { lookback: 16 } },
+  reversion:    { label: "Mean Reversion", cls: "ind", props: { window: 64 } },
+  condition:    { label: "Threshold",    cls: "cond",  props: { op: "greater_than", value: 0.25 } },
+  and_gate:     { label: "AND gate",     cls: "logic", props: {} },
+  or_gate:      { label: "OR gate",      cls: "logic", props: {} },
+  buy_signal:   { label: "Buy Signal",   cls: "sig",   props: {} },
+  sell_signal:  { label: "Sell Signal",  cls: "sig",   props: {} },
+};
+
+let nodes = []; // {id, type, x, y, props}
+let connections = []; // {from, to}
+let nextId = 1;
+
+const wrap = document.getElementById("canvasWrap");
+const edges = document.getElementById("edges");
+
+function addNode(type, x, y, props) {
+  const meta = NODE_META[type];
+  const id = type + "_" + (nextId++);
+  const node = { id, type, x, y, props: props || structuredClone(meta.props) };
+  nodes.push(node);
+  renderNode(node);
+  drawEdges();
+  return node;
+}
+
+function renderNode(node) {
+  const meta = NODE_META[node.type];
+  const el = document.createElement("div");
+  el.className = "node " + meta.cls;
+  el.id = node.id;
+  el.style.left = node.x + "px";
+  el.style.top = node.y + "px";
+
+  let bodyHtml = "";
+  for (const [k, v] of Object.entries(node.props)) {
+    if (k === "op") {
+      bodyHtml += `<label>op<select data-k="op">
+        <option ${v==="greater_than"?"selected":""}>greater_than</option>
+        <option ${v==="less_than"?"selected":""}>less_than</option>
+        <option ${v==="crosses_above"?"selected":""}>crosses_above</option>
+        <option ${v==="crosses_below"?"selected":""}>crosses_below</option>
+      </select></label>`;
+    } else {
+      bodyHtml += `<label>${k}<input data-k="${k}" value="${v}"></label>`;
+    }
+  }
+  const hasIn = node.type !== "data_source";
+  const hasOut = node.type !== "buy_signal" && node.type !== "sell_signal";
+  el.innerHTML = `
+    <div class="title">${meta.label}<span class="x" title="delete">✕</span></div>
+    <div class="body">${bodyHtml || '<span style="color:#6e7681">no params</span>'}</div>
+    ${hasIn ? '<div class="port in" data-port="in"></div>' : ''}
+    ${hasOut ? '<div class="port out" data-port="out"></div>' : ''}
+  `;
+  wrap.appendChild(el);
+
+  // delete
+  el.querySelector(".x").onclick = () => {
+    nodes = nodes.filter(n => n.id !== node.id);
+    connections = connections.filter(c => c.from !== node.id && c.to !== node.id);
+    el.remove(); drawEdges();
+  };
+  // edit props
+  el.querySelectorAll("[data-k]").forEach(inp => {
+    inp.onchange = () => {
+      const k = inp.dataset.k;
+      const val = inp.value;
+      node.props[k] = isNaN(parseFloat(val)) ? val : parseFloat(val);
+    };
+  });
+  // drag node
+  const title = el.querySelector(".title");
+  title.onmousedown = (e) => {
+    if (e.target.classList.contains("x")) return;
+    const sx = e.clientX, sy = e.clientY, ox = node.x, oy = node.y;
+    const move = (ev) => {
+      node.x = ox + (ev.clientX - sx);
+      node.y = oy + (ev.clientY - sy);
+      el.style.left = node.x + "px"; el.style.top = node.y + "px";
+      drawEdges();
+    };
+    const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+    document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+  };
+  // wiring: drag from out port to an in port
+  const outPort = el.querySelector(".port.out");
+  if (outPort) {
+    outPort.onmousedown = (e) => {
+      e.stopPropagation();
+      const move = (ev) => { tempWire = { from: node.id, x: ev.clientX, y: ev.clientY }; drawEdges(); };
+      const up = (ev) => {
+        document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+        const tgt = document.elementFromPoint(ev.clientX, ev.clientY);
+        if (tgt && tgt.classList.contains("in")) {
+          const toNode = tgt.closest(".node").id;
+          if (toNode !== node.id && !connections.some(c => c.from === node.id && c.to === toNode)) {
+            connections.push({ from: node.id, to: toNode });
+          }
+        }
+        tempWire = null; drawEdges();
+      };
+      document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+    };
+  }
+}
+
+let tempWire = null;
+function portPos(nodeId, which) {
+  const el = document.getElementById(nodeId);
+  const p = el.querySelector(".port." + which);
+  const r = p.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+  return { x: r.left + r.width/2 - w.left, y: r.top + r.height/2 - w.top };
+}
+function drawEdges() {
+  const w = wrap.getBoundingClientRect();
+  let paths = "";
+  for (const c of connections) {
+    if (!document.getElementById(c.from) || !document.getElementById(c.to)) continue;
+    const a = portPos(c.from, "out"), b = portPos(c.to, "in");
+    const dx = Math.abs(b.x - a.x) * 0.5;
+    paths += `<path d="M${a.x},${a.y} C${a.x+dx},${a.y} ${b.x-dx},${b.y} ${b.x},${b.y}"
+      fill="none" stroke="#58a6ff" stroke-width="2" opacity="0.8"/>`;
+  }
+  if (tempWire) {
+    const a = portPos(tempWire.from, "out");
+    const bx = tempWire.x - w.left, by = tempWire.y - w.top;
+    paths += `<path d="M${a.x},${a.y} L${bx},${by}" fill="none" stroke="#58a6ff" stroke-width="2" stroke-dasharray="4"/>`;
+  }
+  edges.innerHTML = paths;
+}
+
+// ---------- palette drag-drop ----------
+document.querySelectorAll(".pnode").forEach(p => {
+  p.addEventListener("dragstart", e => e.dataTransfer.setData("type", p.dataset.type));
+});
+wrap.addEventListener("dragover", e => e.preventDefault());
+wrap.addEventListener("drop", e => {
+  e.preventDefault();
+  const type = e.dataTransfer.getData("type");
+  if (!type) return;
+  const r = wrap.getBoundingClientRect();
+  addNode(type, e.clientX - r.left - 74, e.clientY - r.top - 14);
+});
+
+// ---------- params ----------
+const sliders = [
+  ["w_trend","w_trend_v",2], ["w_mom","w_mom_v",2], ["w_rev","w_rev_v",2],
+  ["thr","thr_v",2], ["maxpos","maxpos_v",0], ["vol","vol_v",0]
+];
+sliders.forEach(([id,vid,dp]) => {
+  const s = document.getElementById(id), v = document.getElementById(vid);
+  const upd = () => v.textContent = parseFloat(s.value).toFixed(dp);
+  s.addEventListener("input", upd); upd();
+});
+function params() {
+  return {
+    weight_trend: +document.getElementById("w_trend").value,
+    weight_momentum: +document.getElementById("w_mom").value,
+    weight_reversion: +document.getElementById("w_rev").value,
+    threshold: +document.getElementById("thr").value,
+    max_position: +document.getElementById("maxpos").value,
+    vol: +document.getElementById("vol").value,
+    tick_us: 40,
+  };
+}
+
+// ---------- graph spec ----------
+function graphSpec() {
+  return {
+    name: "Composite Strategy (visual)",
+    params: params(),
+    canvas: {
+      nodes: nodes.map(n => ({ id: n.id, type: n.type, x: Math.round(n.x), y: Math.round(n.y), properties: n.props })),
+      connections: connections.map(c => ({ from: c.from, to: c.to })),
+    },
+  };
+}
+
+document.getElementById("exportBtn").onclick = () => {
+  const blob = new Blob([JSON.stringify(graphSpec(), null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "strategy.json"; a.click();
+};
+
+// ---------- console + SSE ----------
+const cons = document.getElementById("console");
+function line(text) {
+  const d = document.createElement("div");
+  d.className = "ln";
+  if (text.includes("[feed]")) d.classList.add("feed");
+  else if (text.includes("[strat]")) d.classList.add("strat");
+  else if (text.includes("[exec]")) d.classList.add("exec");
+  else if (text.includes("[control]")) d.classList.add("ctrl");
+  if (/\bBUY\b/.test(text)) d.classList.add("buy");
+  if (/\bSELL\b/.test(text)) d.classList.add("sell");
+  if (/P&L|mark-to-market/.test(text)) d.classList.add("pnl");
+  d.textContent = text;
+  cons.appendChild(d);
+  cons.scrollTop = cons.scrollHeight;
+  while (cons.children.length > 400) cons.removeChild(cons.firstChild);
+  updateStats(text);
+}
+function updateStats(text) {
+  let m;
+  if ((m = text.match(/order #\s*(\d+).*pos=\s*([-+]?\d+)/))) {
+    document.getElementById("s_orders").textContent = m[1];
+    document.getElementById("s_pos").textContent = m[2];
+  }
+  if ((m = text.match(/equity=\s*([-+]?\d+\.?\d*)/))) {
+    const v = parseFloat(m[1]);
+    const el = document.getElementById("s_pnl");
+    el.textContent = (v>=0?"+":"") + v.toFixed(0);
+    el.style.color = v >= 0 ? "var(--green)" : "var(--red)";
+  }
+}
+let es = null;
+function connectSSE() {
+  if (es) es.close();
+  es = new EventSource("/events");
+  es.onmessage = (e) => line(e.data);
+  es.onerror = () => { /* auto-reconnects */ };
+}
+
+document.getElementById("runBtn").onclick = async () => {
+  cons.innerHTML = "";
+  document.getElementById("s_orders").textContent = "0";
+  document.getElementById("s_pos").textContent = "0";
+  document.getElementById("s_pnl").textContent = "—";
+  connectSSE();
+  line("[control] sending strategy to server…");
+  try {
+    await fetch("/run", { method: "POST", body: JSON.stringify(graphSpec()) });
+  } catch (err) {
+    line("[control] run failed: " + err + " (is the control server running?)");
+  }
+};
+document.getElementById("stopBtn").onclick = () => fetch("/stop", { method: "POST" }).catch(()=>{});
+
+// ---------- sample strategy ----------
+function loadSample() {
+  nodes.forEach(n => { const el = document.getElementById(n.id); if (el) el.remove(); });
+  nodes = []; connections = []; nextId = 1;
+  const d  = addNode("data_source", 40, 200);
+  const e1 = addNode("ema", 230, 90,  { period: 12 });
+  const e2 = addNode("ema", 230, 200, { period: 48 });
+  const mo = addNode("momentum", 230, 310, { lookback: 16 });
+  const rv = addNode("reversion", 230, 420, { window: 64 });
+  const cond = addNode("condition", 440, 250, { op: "greater_than", value: 0.25 });
+  const buy = addNode("buy_signal", 640, 180);
+  const sell = addNode("sell_signal", 640, 320);
+  connections.push({from:d.id,to:e1.id},{from:d.id,to:e2.id},{from:d.id,to:mo.id},{from:d.id,to:rv.id},
+    {from:e1.id,to:cond.id},{from:e2.id,to:cond.id},{from:mo.id,to:cond.id},{from:rv.id,to:cond.id},
+    {from:cond.id,to:buy.id},{from:cond.id,to:sell.id});
+  drawEdges();
+}
+document.getElementById("loadSample").onclick = loadSample;
+
+// start with the sample loaded
+loadSample();
+window.addEventListener("resize", drawEdges);
+</script>
+</body>
+</html>

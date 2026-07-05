@@ -66,11 +66,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_or_create()?;
     let orders = orders_svc.publisher_builder().create()?;
 
-    // Threshold is env-tunable so the same binary works across feeds of
-    // different volatility without a rebuild.
+    // The strategy is fully env-tunable so the same binary can be driven by the
+    // visual builder (which passes signal weights and thresholds) without a
+    // rebuild. Any unset knob keeps its default.
     let mut cfg = StrategyConfig::default();
-    if let Some(t) = env::var("THRESHOLD").ok().and_then(|v| v.parse().ok()) {
+    let envf = |k: &str| env::var(k).ok().and_then(|v| v.parse::<f64>().ok());
+    let envu = |k: &str| env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
+    if let Some(t) = envf("THRESHOLD") {
         cfg.threshold = t;
+    }
+    if let Some(w) = envf("WEIGHT_TREND") {
+        cfg.weight_trend = w;
+    }
+    if let Some(w) = envf("WEIGHT_MOMENTUM") {
+        cfg.weight_momentum = w;
+    }
+    if let Some(w) = envf("WEIGHT_REVERSION") {
+        cfg.weight_reversion = w;
+    }
+    if let Some(p) = envu("FAST_EMA") {
+        cfg.fast_ema_period = p;
+    }
+    if let Some(p) = envu("SLOW_EMA") {
+        cfg.slow_ema_period = p;
     }
     let mut strat = Strategy::new(cfg);
 

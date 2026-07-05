@@ -29,6 +29,9 @@ libc = "0.2"
 core_affinity = "0.8"
 # Graceful shutdown for the demo processes.
 ctrlc = "3.4"
+# Tiny blocking HTTP server for the strategy-builder control plane (optional
+# tooling, not on the hot path).
+tiny_http = "0.12"
 
 [[example]]
 name = "publisher"
@@ -50,6 +53,12 @@ path = "examples/strategy.rs"
 [[example]]
 name = "execution"
 path = "examples/execution.rs"
+
+# Control server for the visual strategy builder (serves webui/, launches the
+# pipeline, streams orders + P&L to the browser). Not on the hot path.
+[[bin]]
+name = "control-server"
+path = "src/bin/control_server.rs"
 
 # Latency-tuned release profile: fully optimized, single codegen unit, LTO.
 # (panic is left at unwind so tests can assert on panics.)
