@@ -76,8 +76,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Reporter thread: owns all sorting and printing so the receive loop never
     // does either. The hot loop hands it a full window over a channel and
     // immediately gets back to receiving.
+    //
+    // The reporter must run on a DIFFERENT core than the receive loop. The
+    // receive loop takes SCHED_FIFO priority and busy-spins, so it never yields
+    // its core; a reporter sharing that core would simply never be scheduled.
+    // We pin the reporter to `REPORTER_CORE` (distinct from the receive core)
+    // and leave it at normal priority — it does I/O, so it must not be RT.
     let (tx, rx): (Sender<Window>, Receiver<Window>) = mpsc::channel();
+    let reporter_core = env::var("REPORTER_CORE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let reporter = thread::spawn(move || {
+        let _ = core_affinity::set_for_current(core_affinity::CoreId { id: reporter_core });
         while let Ok(mut window) = rx.recv() {
             report(&mut window);
         }

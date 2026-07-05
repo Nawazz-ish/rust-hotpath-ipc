@@ -11,16 +11,21 @@ test:
 	cargo test
 
 # Two-process demo: subscriber in the background, publisher in the foreground.
-# Pins them to separate cores; override with PUB_CORE / SUB_CORE.
+# Pins publisher, subscriber, and the subscriber's reporter thread to three
+# separate cores; override with PUB_CORE / SUB_CORE / REPORTER_CORE. The reporter
+# MUST be on a different core than the subscriber: the receive loop takes
+# SCHED_FIFO and busy-spins, so a reporter sharing its core would never run.
+# SCHED_FIFO needs privilege — run `sudo make demo` (or grant CAP_SYS_NICE).
 PUB_CORE ?= 2
 SUB_CORE ?= 3
+REPORTER_CORE ?= 0
 demo: build
-	@echo "starting subscriber on core $(SUB_CORE)..."
-	CPU_CORE=$(SUB_CORE) cargo run --release --example subscriber & \
+	@echo "starting subscriber on core $(SUB_CORE) (reporter on core $(REPORTER_CORE))..."
+	CPU_CORE=$(SUB_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/examples/subscriber & \
 	SUB_PID=$$!; \
-	sleep 1; \
+	sleep 3; \
 	echo "starting publisher on core $(PUB_CORE)..."; \
-	CPU_CORE=$(PUB_CORE) cargo run --release --example publisher; \
+	CPU_CORE=$(PUB_CORE) ./target/release/examples/publisher; \
 	kill $$SUB_PID 2>/dev/null || true
 
 bench:
