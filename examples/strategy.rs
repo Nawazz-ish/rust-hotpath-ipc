@@ -74,14 +74,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut strat = Strategy::new(cfg);
 
+    // Risk limit: the strategy will not send an order that would take its net
+    // position beyond +/- MAX_POSITION units. This is the risk check on the hot
+    // path — cheap, pre-trade, and it keeps the book bounded regardless of how
+    // strong the signal is. Real systems layer notional and loss limits here too.
+    let max_position: i64 = env::var("MAX_POSITION")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+
     println!("strategy: consuming MarketTick, emitting OrderCommand");
     println!("  in:  {}", MARKET_SERVICE);
     println!("  out: {}", ORDER_SERVICE);
-    println!("  threshold: {:+.3}", cfg.threshold);
+    println!(
+        "  threshold: {:+.3}  max_position: +/-{}",
+        cfg.threshold, max_position
+    );
 
     let mut ticks_seen = 0u64;
     let mut orders_sent = 0u64;
     let mut order_id = 0u64;
+    let mut position: i64 = 0; // net units the strategy intends to hold
+    let mut suppressed = 0u64; // orders blocked by the position limit
 
     while running.load(Ordering::Relaxed) {
         let sample = match ticks.receive()? {
@@ -108,6 +122,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if let Decision::Trade { side, score } = strat.on_price(price) {
+            // Pre-trade risk check: would this order breach the position limit?
+            // A buy at +max (or a sell at -max) is suppressed; orders that
+            // reduce or flip toward flat are always allowed.
+            let delta: i64 = match side {
+                Side::Buy => 1,
+                Side::Sell => -1,
+            };
+            let new_position = position + delta;
+            if new_position > max_position || new_position < -max_position {
+                suppressed += 1;
+                continue;
+            }
+            position = new_position;
+
             order_id += 1;
             let cmd = OrderCommand {
                 timestamp_ns: rdtsc(),
@@ -133,7 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             orders_sent += 1;
 
             println!(
-                "order #{:>5}  {:<4}  px={:>10.2}  score={:+.3}  (tick {})",
+                "order #{:>5}  {:<4}  px={:>10.2}  score={:+.3}  pos={:>+3}  (tick {})",
                 order_id,
                 match side {
                     Side::Buy => "BUY",
@@ -141,20 +169,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 price,
                 score,
+                position,
                 ticks_seen
             );
         }
     }
 
     println!(
-        "strategy stopped: {} ticks in, {} orders out ({:.2}% conversion)",
+        "strategy stopped: {} ticks in, {} orders out ({:.2}% conversion), {} suppressed by position limit",
         ticks_seen,
         orders_sent,
         if ticks_seen > 0 {
             orders_sent as f64 / ticks_seen as f64 * 100.0
         } else {
             0.0
-        }
+        },
+        suppressed
     );
     Ok(())
 }
