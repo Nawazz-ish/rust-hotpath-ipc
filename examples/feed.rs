@@ -1,10 +1,11 @@
 //! Market-data feed: stage 1 of the trading pipeline.
 //!
 //! Publishes a stream of `MarketTick`s on the market service. Prices follow a
-//! seeded mean-reverting random walk (Ornstein-Uhlenbeck-ish), so the series is
-//! reproducible run to run and has enough structure — trends and reversions —
-//! for the strategy to react to. In a real deployment this process would wrap an
-//! exchange websocket adapter; the rest of the pipeline is identical either way.
+//! seeded regime-switching model — alternating trending and choppy stretches
+//! over a mild pull toward a fair value — so the series is reproducible run to
+//! run and has real structure (trends and reversions) for the strategy to react
+//! to. In a real deployment this process would wrap an exchange websocket
+//! adapter; the rest of the pipeline is identical either way.
 //!
 //! Run with:  CPU_CORE=1 TICK_US=100 cargo run --release --example feed
 
