@@ -12,6 +12,7 @@ use iceoryx2::prelude::*;
 use std::{env, thread, time::Duration};
 
 use rust_hotpath_ipc::hot_path::*;
+use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 fn set_cpu_affinity(cpu_id: usize) {
     if core_affinity::set_for_current(CoreId { id: cpu_id }) {
@@ -76,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let msg = OrderCommand {
             timestamp_ns: rdtsc(),
             order_id: seq,
-            price_ticks: 50_000_00 + (seq % 1000) as i64,
+            price_ticks: 5_000_000 + (seq % 1000) as i64,
             quantity: 100 + (seq % 50),
             symbol_id: symbols::BTC_USDT,
             user_id: 1,
@@ -101,9 +102,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if seq % 100_000 == 0 {
             let avg_cycles = total_publish_cycles / publish_count;
-            let avg_ns = avg_cycles / 3; // ~3GHz
+            let avg_ns = fast_cycles_to_ns(avg_cycles);
             println!(
-                "published {} messages: avg {} cycles (~{}ns @ 3GHz)",
+                "published {} messages: avg publish {} cycles ({} ns, calibrated)",
                 seq, avg_cycles, avg_ns
             );
             total_publish_cycles = 0;

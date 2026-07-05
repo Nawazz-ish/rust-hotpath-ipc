@@ -1,41 +1,50 @@
 //! Hot-path latency benchmark subscriber.
 //!
-//! Standalone binary that opens the shared iceoryx2 order-command service,
-//! receives `OrderCommand` samples zero-copy, and measures end-to-end wire
-//! latency by comparing the publisher-side rdtsc timestamp against a fresh
-//! local read.
+//! Opens the shared iceoryx2 order-command service, receives `OrderCommand`
+//! samples zero-copy, and measures end-to-end wire latency by comparing the
+//! publisher-side rdtsc timestamp against a fresh local read.
+//!
+//! Two design points the numbers depend on:
+//!   * cycles are converted to nanoseconds with the crate's runtime TSC
+//!     calibration, not a hardcoded clock assumption;
+//!   * sorting and printing happen on a separate reporter thread, so the
+//!     receive loop never sorts or does I/O — the measurement stays off the
+//!     hot path.
 //!
 //! Run alongside the publisher example:
 //!   CPU_CORE=3 cargo run --release --example subscriber
 
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::thread;
 
 use iceoryx2::prelude::*;
 
 use rust_hotpath_ipc::hot_path::*;
+use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
-/// Number of samples consumed before measurements begin. Warming the caches,
-/// branch predictors, and the iceoryx2 receive path keeps the reported
-/// distribution free of first-touch outliers.
+/// Samples consumed before measurement begins — warms caches, branch
+/// predictors, and the iceoryx2 receive path so first-touch outliers don't
+/// pollute the distribution.
 const WARMUP_RECEIVES: u64 = 10_000;
 
-/// How many measured samples accumulate before we emit a distribution report
-/// and reset the latency buffer.
+/// Measured samples per reporting window.
 const REPORT_INTERVAL: usize = 100_000;
 
-/// Approximate rdtsc ticks per nanosecond on the benchmark host. The raw
-/// timestamps are cycle counts, so we divide the delta to recover nanoseconds.
-const TICKS_PER_NS: u64 = 3;
+/// One window of latencies plus its loss accounting, handed to the reporter.
+struct Window {
+    latencies: Vec<u64>,
+    received: u64,
+    lost: u64,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    // Pin to a dedicated core so the hot loop is never migrated and shares no
-    // L1/L2 with the publisher. Defaults to core 3, overridable via CPU_CORE.
     let core_id: usize = env::var("CPU_CORE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -47,28 +56,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("failed to pin to CPU core {}", core_id);
     }
 
-    // Real-time scheduling on Linux so the kernel does not preempt us mid-loop.
-    // Requires CAP_SYS_NICE (or root); best-effort, non-fatal otherwise.
+    // Real-time scheduling on Linux so the kernel does not preempt mid-loop.
     #[cfg(target_os = "linux")]
     unsafe {
-        let param = libc::sched_param { sched_priority: 99 };
+        let param = libc::sched_param { sched_priority: 98 };
         if libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) == 0 {
-            tracing::info!("engaged SCHED_FIFO priority 99");
+            tracing::info!("engaged SCHED_FIFO priority 98");
         } else {
             tracing::warn!("failed to set SCHED_FIFO (need CAP_SYS_NICE?)");
         }
     }
 
-    // Ctrl-C handler: flip the flag and let the loop drain out cleanly.
     let running = Arc::new(AtomicBool::new(true));
     {
         let running = running.clone();
-        ctrlc::set_handler(move || {
-            running.store(false, Ordering::SeqCst);
-        })?;
+        ctrlc::set_handler(move || running.store(false, Ordering::SeqCst))?;
     }
 
-    // Open the exact same publish-subscribe service the publisher creates.
+    // Reporter thread: owns all sorting and printing so the receive loop never
+    // does either. The hot loop hands it a full window over a channel and
+    // immediately gets back to receiving.
+    let (tx, rx): (Sender<Window>, Receiver<Window>) = mpsc::channel();
+    let reporter = thread::spawn(move || {
+        while let Ok(mut window) = rx.recv() {
+            report(&mut window);
+        }
+    });
+
     let node = NodeBuilder::new().create::<ipc::Service>()?;
     let service = node
         .service_builder(&ORDER_SERVICE.try_into()?)
@@ -78,7 +92,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_publishers(1)
         .history_size(0)
         .open_or_create()?;
-
     let subscriber = service.subscriber_builder().create()?;
 
     tracing::info!(
@@ -87,9 +100,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::mem::size_of::<OrderCommand>()
     );
 
-    // ---- Warmup: burn through the first samples without measuring. ----
     tracing::info!("warming up ({} receives)...", WARMUP_RECEIVES);
-    let mut warmed: u64 = 0;
+    let mut warmed = 0u64;
     while warmed < WARMUP_RECEIVES && running.load(Ordering::Relaxed) {
         if subscriber.receive()?.is_some() {
             warmed += 1;
@@ -99,16 +111,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::info!("warmup complete, entering hot loop");
 
-    // ---- Hot loop measurement state. ----
-    // Pre-allocated so the measured path never hits the allocator.
+    // Pre-allocated so the measured path never touches the allocator.
     let mut latencies: Vec<u64> = Vec::with_capacity(REPORT_INTERVAL);
-
-    // Message-loss tracking via monotonic order_id. `expected_id` is the id we
-    // anticipate on the next sample; any positive gap is counted as lost.
-    let mut expected_id: u64 = 0;
-    let mut have_prev: bool = false;
-    let mut lost_in_window: u64 = 0;
-    let mut received_in_window: u64 = 0;
+    let mut expected_id = 0u64;
+    let mut have_prev = false;
+    let mut lost_in_window = 0u64;
+    let mut received_in_window = 0u64;
 
     while running.load(Ordering::Relaxed) {
         // Zero-copy receive: the sample points straight into shared memory.
@@ -119,21 +127,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
-
-        // Dereference is a zero-copy read of the POD payload.
         let msg: OrderCommand = *sample;
 
-        // End-to-end latency: local timestamp minus the publisher's send-time
-        // timestamp, converted from rdtsc ticks to nanoseconds. Guard against
-        // clock skew / wraparound producing a nonsensical negative delta.
+        // End-to-end latency in cycles, converted to ns via the calibrated
+        // TSC frequency (lock-free fast path). Guard against skew/wraparound.
         let now = rdtsc();
-        let latency_ns = now.saturating_sub(msg.timestamp_ns) / TICKS_PER_NS;
+        let latency_ns = fast_cycles_to_ns(now.saturating_sub(msg.timestamp_ns));
         latencies.push(latency_ns);
         received_in_window += 1;
 
-        // Loss detection: order_id is strictly monotonic on the publisher, so
-        // any forward gap between the expected id and the observed id is the
-        // count of samples that overflowed the queue before we drained them.
+        // Loss detection: order_id is strictly monotonic on the publisher, so a
+        // forward gap counts samples that overflowed the queue before we drained.
         if have_prev {
             if msg.order_id > expected_id {
                 lost_in_window += msg.order_id - expected_id;
@@ -143,28 +147,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         expected_id = msg.order_id.wrapping_add(1);
 
-        // Every REPORT_INTERVAL measured samples: summarize and reset.
+        // Window full: hand it to the reporter and swap in a fresh buffer. The
+        // only work on the hot thread is the channel send (a pointer move).
         if latencies.len() >= REPORT_INTERVAL {
-            report(&mut latencies, received_in_window, lost_in_window);
-            latencies.clear();
+            let full = std::mem::replace(&mut latencies, Vec::with_capacity(REPORT_INTERVAL));
+            let _ = tx.send(Window {
+                latencies: full,
+                received: received_in_window,
+                lost: lost_in_window,
+            });
             lost_in_window = 0;
             received_in_window = 0;
         }
     }
 
+    drop(tx);
+    let _ = reporter.join();
     tracing::info!("shutting down");
     Ok(())
 }
 
-/// Sort the latency buffer, compute the standard percentiles, and print a
-/// one-line summary together with the message-loss rate for the window.
-fn report(latencies: &mut [u64], received: u64, lost: u64) {
+/// Sort a window, compute the standard percentiles, and print a one-line
+/// summary with the message-loss rate. Runs on the reporter thread only.
+fn report(window: &mut Window) {
+    let latencies = &mut window.latencies;
     if latencies.is_empty() {
         return;
     }
 
     latencies.sort_unstable();
-
     let n = latencies.len();
     let min = latencies[0];
     let max = latencies[n - 1];
@@ -172,22 +183,20 @@ fn report(latencies: &mut [u64], received: u64, lost: u64) {
     let p99 = latencies[percentile_index(n, 99.0)];
     let p999 = latencies[percentile_index(n, 99.9)];
 
-    // Loss is measured against the total samples the sender emitted over the
-    // window (the ones we saw plus the ones we detected as gaps).
-    let total = received + lost;
+    let total = window.received + window.lost;
     let loss_pct = if total > 0 {
-        (lost as f64 / total as f64) * 100.0
+        (window.lost as f64 / total as f64) * 100.0
     } else {
         0.0
     };
 
     println!(
         "n={:>8}  Min={:>7} ns  P50={:>7} ns  P99={:>7} ns  P99.9={:>7} ns  Max={:>7} ns  loss={:.4}% ({} lost)",
-        n, min, p50, p99, p999, max, loss_pct, lost
+        n, min, p50, p99, p999, max, loss_pct, window.lost
     );
 }
 
-/// Index into a sorted slice of length `n` for the given percentile in [0,100].
+/// Nearest-rank index into a sorted slice of length `n` for a percentile in [0,100].
 #[inline]
 fn percentile_index(n: usize, pct: f64) -> usize {
     if n == 0 {

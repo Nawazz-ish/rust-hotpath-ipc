@@ -24,11 +24,6 @@ tokio = { version = "1.36", features = ["rt-multi-thread", "macros", "sync", "ti
 # Structured logging.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# Serialization for non-hot-path types.
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.6", features = ["v4", "serde"] }
 # System interfaces: CPU affinity, real-time scheduling, getcpu.
 libc = "0.2"
 core_affinity = "0.8"

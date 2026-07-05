@@ -1,13 +1,11 @@
 // RDTSC-based ultra-low-latency measurement.
 // CPU cycle-accurate timestamps with runtime-calibrated nanosecond conversion.
 
+use crate::hot_path::rdtsc as rdtsc_raw;
 use once_cell::sync::Lazy;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-
-#[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::_rdtsc;
 
 /// CPU frequency in GHz, calibrated once at first use.
 static CPU_FREQ_GHZ: Lazy<f64> = Lazy::new(calibrate_cpu_frequency);
@@ -25,9 +23,9 @@ pub enum ComponentId {
     RiskCheck = 3,
     IceoryxEvent = 4,
     ExchangeSubmission = 5,
-    PositionUpdate = 8,
-    AlgorithmSlice = 9,
-    HotPath = 10,
+    PositionUpdate = 6,
+    AlgorithmSlice = 7,
+    HotPath = 8,
     Total = 100,
 }
 
@@ -89,21 +87,10 @@ impl RdtscLatencyRecorder {
         }
     }
 
-    /// Current CPU timestamp. Inlined to keep measurement overhead minimal.
+    /// Current CPU timestamp (delegates to the crate's single timestamp source).
     #[inline(always)]
     pub fn timestamp() -> u64 {
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            _rdtsc()
-        }
-
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64
-        }
+        rdtsc_raw()
     }
 
     /// Record entry into a component; returns the entry timestamp for the

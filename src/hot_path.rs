@@ -100,6 +100,9 @@ pub const EXECUTION_SERVICE: &str = "Trading/Orders/Executions";
 
 /// Read the CPU timestamp counter. On x86_64 this is a single `rdtsc`
 /// instruction (a few cycles); elsewhere we fall back to the system clock.
+///
+/// This is the crate's single hardware timestamp source; other modules
+/// delegate here rather than re-implementing the read.
 #[inline(always)]
 pub fn rdtsc() -> u64 {
     #[cfg(target_arch = "x86_64")]

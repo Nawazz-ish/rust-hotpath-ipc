@@ -2,30 +2,11 @@
 // Accurate conversion between CPU cycles and nanoseconds, plus correlation to
 // the Unix epoch so timestamps taken in different processes can be compared.
 
+use crate::hot_path::rdtsc;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-#[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::_rdtsc;
-
-/// Raw CPU timestamp counter.
-#[inline(always)]
-pub fn rdtsc() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        _rdtsc()
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64
-    }
-}
 
 /// Calibration data mapping cycles <-> nanoseconds and TSC <-> Unix time.
 #[derive(Debug, Clone)]

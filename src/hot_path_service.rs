@@ -55,7 +55,10 @@ impl HotPathOrderService {
                 if result == 0 {
                     println!("Pinned to CPU core {}", self.cpu_core);
                 } else {
-                    println!("Failed to pin to CPU core {} (try with sudo)", self.cpu_core);
+                    println!(
+                        "Failed to pin to CPU core {} (try with sudo)",
+                        self.cpu_core
+                    );
                 }
             }
         }
@@ -155,12 +158,12 @@ impl HotPathOrderService {
 
                 if processed_orders % 10_000 == 0 {
                     let avg_cycles = processing_cycles_total / processed_orders;
-                    let avg_ns = avg_cycles / 3; // assume ~3GHz
+                    let avg_ns = crate::tsc_calibration::fast_cycles_to_ns(avg_cycles);
                     let elapsed = start_time.elapsed();
                     let orders_per_sec = processed_orders as f64 / elapsed.as_secs_f64();
 
                     println!(
-                        "after {} orders ({:.1}s): avg {} cycles (~{}ns), {:.0} orders/s",
+                        "after {} orders ({:.1}s): avg {} cycles ({} ns), {:.0} orders/s",
                         processed_orders,
                         elapsed.as_secs_f64(),
                         avg_cycles,

@@ -150,7 +150,12 @@ impl LatencyMonitor {
         durations.sort_unstable();
         let len = durations.len();
         let total: Duration = durations.iter().sum();
-        let percentile = |p: f64| durations[((len as f64 * p) as usize).min(len - 1)];
+        // Nearest-rank percentile: ceil(p * n), 1-indexed, clamped — the same
+        // definition the benchmark subscriber uses, so the two agree.
+        let percentile = |p: f64| {
+            let rank = (p * len as f64).ceil() as usize;
+            durations[rank.saturating_sub(1).min(len - 1)]
+        };
 
         let computed = LatencyStats {
             min: durations[0],
@@ -193,8 +198,11 @@ impl LatencyMeasurer {
 
     pub fn finish(self) {
         let duration = self.start_time.elapsed();
-        self.monitor
-            .record_operation_latency_with_metadata(&self.operation, duration, self.metadata);
+        self.monitor.record_operation_latency_with_metadata(
+            &self.operation,
+            duration,
+            self.metadata,
+        );
     }
 }
 

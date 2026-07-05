@@ -21,7 +21,7 @@ use iceoryx2::prelude::ZeroCopySend;
 #[repr(C, align(64))]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct MarketTickPOD {
-    pub timestamp_ns: u64,  // RDTSC timestamp
+    pub timestamp_ns: u64, // RDTSC timestamp
     pub symbol_id: u32,
     pub exchange_id: u8,
     pub side: u8, // 0=buy, 1=sell
@@ -69,7 +69,7 @@ pub struct TickerPOD {
 /// OHLCV candle — 64 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Zeroable)]
-pub struct OHLCVPod {
+pub struct OhlcvPOD {
     pub timestamp_ns: u64, // candle open time
     pub open: i64,
     pub high: i64,
@@ -94,7 +94,7 @@ pub struct CreateOrderRequestPOD {
     // Core order fields (64 bytes)
     pub timestamp_ns: u64,
     pub request_id: u64,
-    pub price: i64,   // fixed-point (0 for market orders)
+    pub price: i64,    // fixed-point (0 for market orders)
     pub quantity: u64, // fixed-point
     pub stop_price: i64,
     pub client_order_id: u64,
@@ -105,9 +105,9 @@ pub struct CreateOrderRequestPOD {
     // Algorithm & strategy fields (64 bytes)
     pub strategy_version: u32,
     pub exchange_id: u8,
-    pub side: u8,         // 0=buy, 1=sell
-    pub order_type: u16,  // see OrderType
-    pub time_in_force: u8, // 0=GTC, 1=IOC, 2=FOK, 3=GTT
+    pub side: u8,            // 0=buy, 1=sell
+    pub order_type: u16,     // see OrderType
+    pub time_in_force: u8,   // 0=GTC, 1=IOC, 2=FOK, 3=GTT
     pub algorithm_type: u16, // see AlgorithmType
     pub padding1: u8,
     pub algorithm_params: [u8; 48], // flexible algorithm parameters
@@ -158,10 +158,10 @@ pub struct OrderResponsePOD {
     pub request_id: u64, // matches request
     pub filled_quantity: u64,
     pub avg_fill_price: i64,
-    pub latency_ns: u64, // hot-path processing latency
+    pub latency_ns: u64,    // hot-path processing latency
     pub order_id: [u8; 64], // exchange order ID (null-terminated)
-    pub status: u8,      // 0=rejected, 1=accepted, 2=pending
-    pub error_code: u16, // 0 if success
+    pub status: u8,         // 0=rejected, 1=accepted, 2=pending
+    pub error_code: u16,    // 0 if success
     pub padding1: [u8; 13],
 }
 
@@ -187,13 +187,13 @@ pub struct OrderStatusUpdatePOD {
 unsafe impl ZeroCopySend for MarketTickPOD {}
 unsafe impl ZeroCopySend for OrderBookUpdatePOD {}
 unsafe impl ZeroCopySend for TickerPOD {}
-unsafe impl ZeroCopySend for OHLCVPod {}
+unsafe impl ZeroCopySend for OhlcvPOD {}
 unsafe impl ZeroCopySend for CreateOrderRequestPOD {}
 unsafe impl ZeroCopySend for OrderResponsePOD {}
 unsafe impl ZeroCopySend for OrderStatusUpdatePOD {}
 
 // Manual Pod for types with explicit padding.
-unsafe impl Pod for OHLCVPod {}
+unsafe impl Pod for OhlcvPOD {}
 unsafe impl Pod for CreateOrderRequestPOD {}
 unsafe impl Pod for OrderResponsePOD {}
 
@@ -282,7 +282,7 @@ const _: () = assert!(std::mem::size_of::<MarketTickPOD>() == 64);
 const _: () = assert!(std::mem::align_of::<MarketTickPOD>() == 64);
 const _: () = assert!(std::mem::size_of::<OrderBookUpdatePOD>() == 64);
 const _: () = assert!(std::mem::size_of::<TickerPOD>() == 64);
-const _: () = assert!(std::mem::size_of::<OHLCVPod>() == 64);
+const _: () = assert!(std::mem::size_of::<OhlcvPOD>() == 64);
 const _: () = assert!(std::mem::size_of::<CreateOrderRequestPOD>() == 128);
 const _: () = assert!(std::mem::size_of::<OrderResponsePOD>() == 128);
 const _: () = assert!(std::mem::size_of::<OrderStatusUpdatePOD>() == 128);
