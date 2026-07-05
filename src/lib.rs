@@ -37,6 +37,7 @@ pub mod latency;
 pub mod pod_types;
 pub mod rdtsc;
 pub mod service_names;
+pub mod strategy;
 pub mod tsc_calibration;
 
 // Convenient top-level re-exports for the most-used items.

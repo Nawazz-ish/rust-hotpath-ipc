@@ -38,6 +38,19 @@ path = "examples/publisher.rs"
 name = "subscriber"
 path = "examples/subscriber.rs"
 
+# Three-stage trading pipeline: feed -> strategy -> execution.
+[[example]]
+name = "feed"
+path = "examples/feed.rs"
+
+[[example]]
+name = "strategy"
+path = "examples/strategy.rs"
+
+[[example]]
+name = "execution"
+path = "examples/execution.rs"
+
 # Latency-tuned release profile: fully optimized, single codegen unit, LTO.
 # (panic is left at unwind so tests can assert on panics.)
 [profile.release]
