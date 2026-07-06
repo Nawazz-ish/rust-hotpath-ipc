@@ -100,6 +100,11 @@ pub const ORDER_SERVICE: &str = "Trading/Orders/Commands";
 pub const MARKET_SERVICE: &str = "Trading/Market/Ticks";
 pub const EXECUTION_SERVICE: &str = "Trading/Orders/Executions";
 
+/// Event (notification) service paired with `MARKET_SERVICE`. In WaitSet mode the
+/// feed notifies here after each publish so the strategy can block instead of
+/// busy-poll; the tick data itself still travels over the pub/sub service.
+pub const MARKET_EVENT: &str = "Trading/Market/TickEvent";
+
 // ============================================================================
 // UTILITIES
 // ============================================================================

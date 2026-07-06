@@ -46,6 +46,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctrlc::set_handler(move || running.store(false, Ordering::SeqCst))?;
     }
 
+    // Wait mode: how the hot loop waits for the next tick.
+    //   poll    (default) — busy-poll `receive()`, spinning; lowest latency, burns a core.
+    //   waitset           — block on an iceoryx2 event listener until the feed
+    //                       notifies, then drain; frees the core, adds wake-up latency.
+    let wait_mode = env::var("WAIT_MODE").unwrap_or_else(|_| "poll".into());
+    let use_waitset = wait_mode == "waitset";
+
     let node = NodeBuilder::new().create::<ipc::Service>()?;
 
     // Input: market ticks from the feed.
@@ -58,6 +65,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .history_size(16)
         .open_or_create()?;
     let ticks = market.subscriber_builder().create()?;
+
+    // Event listener paired with the tick service — used only in waitset mode to
+    // block until the feed signals a new tick.
+    let market_event = node
+        .service_builder(&MARKET_EVENT.try_into()?)
+        .event()
+        .open_or_create()?;
+    let listener = market_event.listener_builder().create()?;
 
     // Output: orders to the execution stage.
     let orders_svc = node
@@ -167,8 +182,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => println!("  mode: fixed composite strategy"),
     }
     println!(
-        "  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
-        cfg.threshold, max_position, reporter_core, rdtsc_floor
+        "  wait_mode: {}  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
+        if use_waitset { "waitset (blocking)" } else { "poll (busy-spin)" },
+        cfg.threshold,
+        max_position,
+        reporter_core,
+        rdtsc_floor
     );
 
     let mut ticks_seen = 0u64;
@@ -181,6 +200,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sample = match ticks.receive()? {
             Some(s) => s,
             None => {
+                if use_waitset {
+                    // Block in the kernel until the feed notifies a new tick.
+                    // This frees the core between ticks at the cost of wake-up
+                    // latency (the poll path never sleeps).
+                    let _ = listener.blocking_wait_one();
+                    continue;
+                }
                 std::hint::spin_loop();
                 continue;
             }

@@ -73,6 +73,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_or_create()?;
     let publisher = service.publisher_builder().create()?;
 
+    // Event notifier paired with the tick service. A consumer running in WaitSet
+    // mode blocks on the matching listener; we notify after each publish so it
+    // wakes. In busy-poll mode the consumer ignores this and the notify is cheap.
+    let event = node
+        .service_builder(&MARKET_EVENT.try_into()?)
+        .event()
+        .open_or_create()?;
+    let notifier = event.notifier_builder().create()?;
+
     println!(
         "feed publishing MarketTick on '{}' (seed={}, tick={}us)",
         MARKET_SERVICE, seed, tick_us
@@ -139,6 +148,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sample = publisher.loan_uninit()?;
         let sample = sample.write_payload(tick);
         sample.send()?;
+        // Wake any WaitSet-mode consumer. Cheap; ignored by busy-poll consumers.
+        let _ = notifier.notify();
 
         if seq % 50_000 == 0 {
             println!("feed: {} ticks, price={:.2}", seq, price);
