@@ -1,27 +1,24 @@
 //! # rust-hotpath-ipc
 //!
 //! A lock-free, zero-copy shared-memory hot path for a low-latency trading
-//! system. This is an extracted subsystem: the message layer, latency
-//! instrumentation, and CPU-pinned processing loop that carry orders and market
-//! data between processes with no serialization, no syscalls on the steady
-//! state, and no database coupling.
+//! system. This is an extracted subsystem: the message layer, the strategy
+//! engine, and the latency instrumentation that carry orders and market data
+//! between processes with no serialization, no syscalls on the steady state,
+//! and no database coupling.
 //!
 //! ## Layers
 //!
 //! - [`hot_path`] — the 64-byte cache-line-aligned POD messages
 //!   ([`hot_path::OrderCommand`], [`hot_path::MarketTick`],
 //!   [`hot_path::ExecutionReport`]) plus [`hot_path::rdtsc`] and the service names.
-//! - [`pod_types`] — a wider set of `bytemuck`-validated POD market-data and
-//!   order types, including fixed-point encoding and TWAP/VWAP/Iceberg parameter
-//!   packing.
-//! - [`rdtsc`] — cycle-accurate RDTSC latency recording with a bounded,
-//!   non-blocking ring buffer.
+//! - [`strategy`] — the composite trend/momentum/mean-reversion strategy that
+//!   runs on each tick.
+//! - [`compiler`] + [`bytecode`] — compile a drawn strategy graph into a flat
+//!   bytecode program and interpret it on a stack VM, once per tick.
 //! - [`tsc_calibration`] — cycle <-> nanosecond calibration and TSC <-> Unix-time
 //!   correlation across processes.
-//! - [`latency`] — an async, off-hot-path monitor that aggregates named
-//!   operations into percentile statistics.
-//! - [`hot_path_service`] — the CPU-pinned, real-time-scheduled processing loop.
-//! - [`service_names`] — shared Iceoryx2 service-name constants.
+//! - [`latency_window`] — the off-hot-path latency recorder: a lock-free push on
+//!   the hot side, percentile aggregation on a reporter thread pinned off-core.
 //!
 //! ## Transport attribution
 //!
@@ -34,12 +31,7 @@
 pub mod bytecode;
 pub mod compiler;
 pub mod hot_path;
-pub mod hot_path_service;
-pub mod latency;
 pub mod latency_window;
-pub mod pod_types;
-pub mod rdtsc;
-pub mod service_names;
 pub mod strategy;
 pub mod tsc_calibration;
 
@@ -48,4 +40,3 @@ pub use hot_path::{
     rdtsc as rdtsc_now, ExecutionReport, MarketTick, OrderBookSnapshot, OrderCommand,
     EXECUTION_SERVICE, MARKET_SERVICE, ORDER_SERVICE,
 };
-pub use hot_path_service::HotPathOrderService;

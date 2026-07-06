@@ -53,26 +53,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bytemuck"
-version = "1.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -696,7 +676,6 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "rust-hotpath-ipc"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
  "core_affinity",
  "ctrlc",
  "iceoryx2",
@@ -704,7 +683,6 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "tiny_http",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -849,27 +827,6 @@ dependencies = [
  "chunked_transfer",
  "httpdate",
  "log",
-]
-
-[[package]]
-name = "tokio"
-version = "1.52.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
-dependencies = [
- "pin-project-lite",
- "tokio-macros",
-]
-
-[[package]]
-name = "tokio-macros"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

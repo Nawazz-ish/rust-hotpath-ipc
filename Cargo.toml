@@ -13,14 +13,10 @@ path = "src/lib.rs"
 [dependencies]
 # Zero-copy IPC transport: the shared-memory lock-free ring buffer + pub/sub.
 iceoryx2 = "0.7.0"
-# POD validation for zero-copy message types.
-bytemuck = { version = "1.14", features = ["derive", "extern_crate_alloc"] }
-# One-time / lazy statics for calibration and the global recorder.
+# One-time / lazy statics for the TSC calibration cell.
 once_cell = "1.19"
 # Fast RwLock for the TSC calibration cell.
 parking_lot = "0.12"
-# Async runtime for the off-hot-path latency monitor.
-tokio = { version = "1.36", features = ["rt-multi-thread", "macros", "sync", "time"] }
 # Structured logging.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
