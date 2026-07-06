@@ -125,14 +125,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // If STRATEGY_JSON points at a graph the visual builder produced, compile it
     // to bytecode and run THAT per tick — the drawn graph actually drives
-    // execution. Otherwise fall back to the hand-written composite strategy.
-    let mut vm: Option<Vm> = env::var("STRATEGY_JSON")
-        .ok()
-        .and_then(|p| std::fs::read_to_string(&p).ok())
-        .and_then(|s| compiler::parse(&s).ok())
-        .and_then(|g| compiler::compile(&g).ok())
-        .map(Vm::new)
-        .filter(|vm| !vm.is_empty());
+    // execution. A parse or compile failure is reported (not silently ignored),
+    // and the strategy falls back to the hand-written composite.
+    let mut vm: Option<Vm> = match env::var("STRATEGY_JSON").ok() {
+        Some(path) => {
+            match std::fs::read_to_string(&path) {
+                Ok(json) => match compiler::parse(&json)
+                    .and_then(|g| compiler::compile(&g).map_err(|e| e.to_string()))
+                {
+                    Ok(prog) => {
+                        let vm = Vm::new(prog);
+                        if vm.is_empty() {
+                            println!("  strategy graph compiled to an empty program; using fixed strategy");
+                            None
+                        } else {
+                            Some(vm)
+                        }
+                    }
+                    Err(e) => {
+                        println!("  strategy graph failed to compile ({e}); using fixed strategy");
+                        None
+                    }
+                },
+                Err(e) => {
+                    println!("  could not read STRATEGY_JSON ({e}); using fixed strategy");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
 
     println!("strategy: consuming MarketTick, emitting OrderCommand");
     println!("  in:  {}", MARKET_SERVICE);

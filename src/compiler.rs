@@ -41,6 +41,14 @@ pub enum CompileError {
     Cycle,
     UnknownNode(String),
     UnknownType(String),
+    /// A node that produces a single value has more than one input wired — the
+    /// graph is ambiguous. (e.g. two indicators into one condition.) Combine them
+    /// through a logic gate instead. We reject rather than silently drop inputs.
+    TooManyInputs {
+        node: String,
+        ntype: String,
+        got: usize,
+    },
 }
 
 impl std::fmt::Display for CompileError {
@@ -49,6 +57,10 @@ impl std::fmt::Display for CompileError {
             CompileError::Cycle => write!(f, "strategy graph has a cycle"),
             CompileError::UnknownNode(id) => write!(f, "connection references unknown node {id}"),
             CompileError::UnknownType(t) => write!(f, "unknown node type {t}"),
+            CompileError::TooManyInputs { node, ntype, got } => write!(
+                f,
+                "{ntype} node '{node}' has {got} inputs but takes one; combine inputs with a gate"
+            ),
         }
     }
 }
@@ -98,7 +110,7 @@ pub fn compile(spec: &GraphSpec) -> Result<Vec<Op>, CompileError> {
     for node in &spec.nodes {
         match node.ntype.as_str() {
             "buy_signal" | "sell_signal" => {
-                lo.emit_inputs(&node.id)?;
+                lo.emit_unary_input(&node.id)?;
                 lo.prog.push(if node.ntype == "buy_signal" {
                     Op::Buy
                 } else {
@@ -113,15 +125,23 @@ pub fn compile(spec: &GraphSpec) -> Result<Vec<Op>, CompileError> {
 }
 
 impl<'a> Lowerer<'a> {
-    /// Emit the sub-tree feeding `id`'s single logical input, leaving one value
-    /// on the stack. Used by unary consumers (buy/sell, condition, not).
-    fn emit_inputs(&mut self, id: &'a str) -> Result<(), CompileError> {
+    /// Emit the single input feeding a *unary* consumer (buy/sell/condition),
+    /// leaving one value on the stack. More than one input is ambiguous and is a
+    /// hard error — we never silently drop a wired input. Zero inputs pushes a
+    /// neutral 0 so the consumer simply doesn't fire.
+    fn emit_unary_input(&mut self, id: &'a str) -> Result<(), CompileError> {
         let srcs = self.incoming.get(id).cloned().unwrap_or_default();
-        // A signal/condition consumes its first incoming edge.
+        if srcs.len() > 1 {
+            let node = self.by_id[id];
+            return Err(CompileError::TooManyInputs {
+                node: id.to_string(),
+                ntype: node.ntype.clone(),
+                got: srcs.len(),
+            });
+        }
         if let Some(&src) = srcs.first() {
             self.emit_node(src)?;
         } else {
-            // No input wired: push a neutral 0 so a Buy/Sell simply won't fire.
             self.prog.push(Op::PushConst(0.0));
         }
         Ok(())
@@ -163,7 +183,7 @@ impl<'a> Lowerer<'a> {
 
             // Condition: emit its input, push the threshold, compare.
             "condition" => {
-                self.emit_inputs(id)?;
+                self.emit_unary_input(id)?;
                 let value = node.nums.get("value").copied().unwrap_or(0.0);
                 self.prog.push(Op::PushConst(value));
                 let op = node
@@ -201,7 +221,7 @@ impl<'a> Lowerer<'a> {
 
             // A signal node used as an intermediate input (rare) — emit its input.
             "buy_signal" | "sell_signal" => {
-                self.emit_inputs(id)?;
+                self.emit_unary_input(id)?;
             }
 
             other => {
@@ -512,13 +532,16 @@ mod tests {
 
     #[test]
     fn cycle_is_rejected() {
+        // Two conditions feeding each other (each with exactly one input, so it's
+        // a genuine cycle, not an ambiguous-input error), reachable from a buy.
         let json = r#"{"canvas":{
             "nodes":[{"id":"a","type":"condition","properties":{"value":1}},
-                     {"id":"b","type":"buy_signal","properties":{}}],
-            "connections":[{"from":"a","to":"b"},{"from":"b","to":"a"},{"from":"a","to":"a"}]
+                     {"id":"b","type":"condition","properties":{"value":1}},
+                     {"id":"s","type":"buy_signal","properties":{}}],
+            "connections":[{"from":"a","to":"b"},{"from":"b","to":"a"},{"from":"b","to":"s"}]
         }}"#;
         let spec = parse(json).unwrap();
-        // b -> a -> b via the buy node feeding a: emit from b walks a walks b -> cycle
+        // emit from s -> b -> a -> b: revisits b -> cycle.
         assert!(matches!(compile(&spec), Err(CompileError::Cycle)));
     }
 
@@ -526,5 +549,67 @@ mod tests {
     fn empty_graph_empty_program() {
         let prog = compile(&GraphSpec::default()).unwrap();
         assert!(prog.is_empty());
+    }
+
+    #[test]
+    fn multi_input_and_gate_compiles_all_inputs() {
+        // (momentum > 0.1) AND (reversion < -0.1) -> buy. Both indicators must
+        // appear in the program, folded by AND.
+        let json = r#"{"canvas":{"nodes":[
+            {"id":"d","type":"data_source","properties":{}},
+            {"id":"m","type":"momentum","properties":{"lookback":16}},
+            {"id":"cm","type":"condition","properties":{"op":"greater_than","value":0.1}},
+            {"id":"r","type":"reversion","properties":{"window":64}},
+            {"id":"cr","type":"condition","properties":{"op":"less_than","value":-0.1}},
+            {"id":"g","type":"and_gate","properties":{}},
+            {"id":"b","type":"buy_signal","properties":{}}
+        ],"connections":[
+            {"from":"d","to":"m"},{"from":"m","to":"cm"},
+            {"from":"d","to":"r"},{"from":"r","to":"cr"},
+            {"from":"cm","to":"g"},{"from":"cr","to":"g"},
+            {"from":"g","to":"b"}
+        ]}}"#;
+        let prog = compile(&parse(json).unwrap()).unwrap();
+        assert_eq!(
+            prog,
+            vec![
+                Op::Momentum {
+                    slot: 0,
+                    lookback: 16
+                },
+                Op::PushConst(0.1),
+                Op::Gt,
+                Op::Reversion {
+                    slot: 1,
+                    window: 64
+                },
+                Op::PushConst(-0.1),
+                Op::Lt,
+                Op::And,
+                Op::Buy,
+            ]
+        );
+    }
+
+    #[test]
+    fn ambiguous_condition_is_rejected_not_dropped() {
+        // Two indicators wired straight into one condition is ambiguous — this
+        // must error, NOT silently drop one input.
+        let json = r#"{"canvas":{"nodes":[
+            {"id":"d","type":"data_source","properties":{}},
+            {"id":"m","type":"momentum","properties":{"lookback":16}},
+            {"id":"r","type":"reversion","properties":{"window":64}},
+            {"id":"c","type":"condition","properties":{"op":"greater_than","value":0.1}},
+            {"id":"b","type":"buy_signal","properties":{}}
+        ],"connections":[
+            {"from":"d","to":"m"},{"from":"d","to":"r"},
+            {"from":"m","to":"c"},{"from":"r","to":"c"},
+            {"from":"c","to":"b"}
+        ]}}"#;
+        let spec = parse(json).unwrap();
+        assert!(matches!(
+            compile(&spec),
+            Err(CompileError::TooManyInputs { .. })
+        ));
     }
 }
