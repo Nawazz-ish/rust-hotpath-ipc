@@ -7,48 +7,18 @@
 //! Run with:  CPU_CORE=2 cargo run --release --bin bench-publisher
 //! (reliable core pinning + real-time priority may require sudo on Linux)
 
-use core_affinity::CoreId;
 use iceoryx2::prelude::*;
-use std::{env, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use rust_hotpath_ipc::hot_path::*;
+use rust_hotpath_ipc::runtime::{env_or, pin_and_prioritize};
 use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
-
-fn set_cpu_affinity(cpu_id: usize) {
-    if core_affinity::set_for_current(CoreId { id: cpu_id }) {
-        println!("publisher pinned to CPU core {}", cpu_id);
-    } else {
-        println!("failed to pin to CPU core {} (try with sudo)", cpu_id);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn set_realtime_priority() {
-    unsafe {
-        let param = libc::sched_param { sched_priority: 99 };
-        if libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) == 0 {
-            println!("real-time priority set (SCHED_FIFO, priority 99)");
-        } else {
-            println!("failed to set real-time priority (try with sudo)");
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn set_realtime_priority() {
-    // SCHED_FIFO is not available on this platform.
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("hot-path order publisher");
     println!("========================");
 
-    let cpu_id: usize = env::var("CPU_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2);
-    set_cpu_affinity(cpu_id);
-    set_realtime_priority();
+    pin_and_prioritize(env_or("CPU_CORE", 2), "publisher");
 
     let node = NodeBuilder::new().create::<ipc::Service>()?;
     let service = node

@@ -19,6 +19,8 @@
 //!   correlation across processes.
 //! - [`latency_window`] — the off-hot-path latency recorder: a lock-free push on
 //!   the hot side, percentile aggregation on a reporter thread pinned off-core.
+//! - [`runtime`] — shared process setup: reading tunables from the environment
+//!   and pinning a thread to a core at real-time priority.
 //!
 //! ## Transport attribution
 //!
@@ -32,6 +34,7 @@ pub mod bytecode;
 pub mod compiler;
 pub mod hot_path;
 pub mod latency_window;
+pub mod runtime;
 pub mod strategy;
 pub mod tsc_calibration;
 

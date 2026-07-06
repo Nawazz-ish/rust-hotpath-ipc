@@ -8,26 +8,21 @@
 //!
 //! Run with:  CPU_CORE=3 cargo run --release --bin execution
 
-use core_affinity::CoreId;
 use iceoryx2::prelude::*;
-use std::{
-    env,
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use rust_hotpath_ipc::hot_path::*;
 use rust_hotpath_ipc::latency_window::LatencyReporter;
+use rust_hotpath_ipc::runtime::{env_or, pin_only};
 use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cpu_id: usize = env::var("CPU_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3);
-    if core_affinity::set_for_current(CoreId { id: cpu_id }) {
-        println!("execution pinned to CPU core {}", cpu_id);
-    }
+    // Pinned but not real-time: it fills orders and updates P&L off the tightest
+    // loop, and stays preemptible so it never blocks the reporter.
+    let cpu_id: usize = env_or("CPU_CORE", 3);
+    pin_only(cpu_id);
+    println!("execution pinned to CPU core {cpu_id}");
 
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -62,10 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tick-to-fill latency window, aggregated off the hot path on a reporter
     // thread pinned to REPORTER_CORE. Execution has T0 (carried in the order's
     // origin_ts) and T2 (rdtsc at fill), so it measures the full custom pipeline.
-    let reporter_core: usize = env::var("REPORTER_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let reporter_core: usize = env_or("REPORTER_CORE", 0);
     let reporter = LatencyReporter::new(reporter_core);
     let mut win_tick_to_fill = reporter.window("tick-to-fill");
 

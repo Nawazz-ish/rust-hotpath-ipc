@@ -9,11 +9,11 @@
 //!
 //! Run with:  CPU_CORE=1 TICK_US=100 cargo run --release --bin feed
 
-use core_affinity::CoreId;
 use iceoryx2::prelude::*;
-use std::{env, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use rust_hotpath_ipc::hot_path::*;
+use rust_hotpath_ipc::runtime::{env_or, pin_only};
 
 /// A tiny deterministic PRNG (xorshift64*) so we depend on no rng crate and the
 /// series is reproducible from a seed.
@@ -43,24 +43,16 @@ impl Rng {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cpu_id: usize = env::var("CPU_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
-    if core_affinity::set_for_current(CoreId { id: cpu_id }) {
-        println!("feed pinned to CPU core {}", cpu_id);
-    }
+    // The feed is paced by a sleep between ticks, so it does not take real-time
+    // priority (that is for the busy-spin consumers) — it only pins to its core.
+    let cpu_id: usize = env_or("CPU_CORE", 1);
+    pin_only(cpu_id);
+    println!("feed pinned to CPU core {cpu_id}");
 
-    let seed: u64 = env::var("SEED")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(42);
+    let seed: u64 = env_or("SEED", 42);
     // Microseconds between ticks; 0 = full speed. A realistic feed is paced, so
     // the default gives a readable ~10k ticks/sec.
-    let tick_us: u64 = env::var("TICK_US")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100);
+    let tick_us: u64 = env_or("TICK_US", 100);
 
     let node = NodeBuilder::new().create::<ipc::Service>()?;
     let service = node
@@ -95,10 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // trade rather than pure noise around a fixed level. VOL scales the shocks.
     let mut rng = Rng::new(seed);
     let mut price = 50_000.0_f64; // e.g. BTC-USD
-    let vol: f64 = env::var("VOL")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(6.0);
+    let vol: f64 = env_or("VOL", 6.0);
 
     // Regime state: drift (price units per tick) and how long it lasts.
     let mut drift = 0.0_f64;

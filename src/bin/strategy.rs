@@ -11,34 +11,23 @@
 //!
 //! Run with:  CPU_CORE=2 cargo run --release --bin strategy
 
-use core_affinity::CoreId;
 use iceoryx2::prelude::*;
-use std::{
-    env,
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
-};
+use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use rust_hotpath_ipc::bytecode::{self, Vm};
 use rust_hotpath_ipc::compiler;
 use rust_hotpath_ipc::hot_path::*;
 use rust_hotpath_ipc::latency_window::{calibrate_rdtsc_floor, LatencyReporter};
+use rust_hotpath_ipc::runtime::{env_or, pin_and_prioritize};
 use rust_hotpath_ipc::strategy::{Decision, Side, Strategy, StrategyConfig};
 use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cpu_id: usize = env::var("CPU_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2);
-    if core_affinity::set_for_current(CoreId { id: cpu_id }) {
-        println!("strategy pinned to CPU core {}", cpu_id);
-    }
-    #[cfg(target_os = "linux")]
-    unsafe {
-        let param = libc::sched_param { sched_priority: 90 };
-        let _ = libc::sched_setscheduler(0, libc::SCHED_FIFO, &param);
-    }
+    // Busy-spin consumer on the hot path: pin it and raise it to real-time
+    // priority so the kernel does not preempt it mid-decision.
+    pin_and_prioritize(env_or("CPU_CORE", 2), "strategy");
 
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -115,19 +104,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // position beyond +/- MAX_POSITION units. This is the risk check on the hot
     // path — cheap, pre-trade, and it keeps the book bounded regardless of how
     // strong the signal is. Real systems layer notional and loss limits here too.
-    let max_position: i64 = env::var("MAX_POSITION")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3);
+    let max_position: i64 = env_or("MAX_POSITION", 3);
 
     // Latency windows, aggregated off the hot path on a reporter thread pinned
     // to REPORTER_CORE (a core no stage's hot loop owns). This stage owns two:
     //   - decision-only: the Strategy::on_price() call in isolation (per tick)
     //   - tick-to-order: origin tick timestamp -> order emitted
-    let reporter_core: usize = env::var("REPORTER_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let reporter_core: usize = env_or("REPORTER_CORE", 0);
     let reporter = LatencyReporter::new(reporter_core);
     let mut win_decision = reporter.window("decision-only");
     let mut win_tick_to_order = reporter.window("tick-to-order");

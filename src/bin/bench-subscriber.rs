@@ -14,7 +14,6 @@
 //! Run alongside the publisher example:
 //!   CPU_CORE=3 cargo run --release --bin bench-subscriber
 
-use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -23,6 +22,7 @@ use std::thread;
 use iceoryx2::prelude::*;
 
 use rust_hotpath_ipc::hot_path::*;
+use rust_hotpath_ipc::runtime::{env_or, pin_and_prioritize, pin_only};
 use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 /// Samples consumed before measurement begins — warms caches, branch
@@ -45,27 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let core_id: usize = env::var("CPU_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3);
-
-    if core_affinity::set_for_current(core_affinity::CoreId { id: core_id }) {
-        tracing::info!("pinned subscriber to CPU core {}", core_id);
-    } else {
-        tracing::warn!("failed to pin to CPU core {}", core_id);
-    }
-
-    // Real-time scheduling on Linux so the kernel does not preempt mid-loop.
-    #[cfg(target_os = "linux")]
-    unsafe {
-        let param = libc::sched_param { sched_priority: 98 };
-        if libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) == 0 {
-            tracing::info!("engaged SCHED_FIFO priority 98");
-        } else {
-            tracing::warn!("failed to set SCHED_FIFO (need CAP_SYS_NICE?)");
-        }
-    }
+    // Pin to a dedicated core and raise to real-time priority so the busy-spin
+    // receive loop is never preempted mid-measurement.
+    let core_id: usize = env_or("CPU_CORE", 3);
+    pin_and_prioritize(core_id, "subscriber");
 
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -83,12 +66,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // We pin the reporter to `REPORTER_CORE` (distinct from the receive core)
     // and leave it at normal priority — it does I/O, so it must not be RT.
     let (tx, rx): (Sender<Window>, Receiver<Window>) = mpsc::channel();
-    let reporter_core = env::var("REPORTER_CORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let reporter_core: usize = env_or("REPORTER_CORE", 0);
     let reporter = thread::spawn(move || {
-        let _ = core_affinity::set_for_current(core_affinity::CoreId { id: reporter_core });
+        pin_only(reporter_core);
         while let Ok(mut window) = rx.recv() {
             report(&mut window);
         }
