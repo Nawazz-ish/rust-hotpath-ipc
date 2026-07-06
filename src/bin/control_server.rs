@@ -6,7 +6,7 @@
 //!      on `POST /run`,
 //!   3. translates that graph into the `StrategyConfig` knobs the real Rust
 //!      strategy engine reads (signal weights, threshold, position limit),
-//!   4. launches the feed -> strategy -> execution pipeline as three processes,
+//!   4. launches the exchange -> strategy -> execution pipeline as three processes,
 //!   5. streams their combined output back to the browser as Server-Sent Events
 //!      so you watch orders and mark-to-market P&L live.
 //!
@@ -268,7 +268,7 @@ impl StrategyParams {
     }
 }
 
-/// Launch feed + strategy + execution, each with stdout piped into the hub.
+/// Launch exchange + strategy + execution, each with stdout piped into the hub.
 fn launch(
     p: &StrategyParams,
     graph_json_path: Option<&str>,
@@ -277,7 +277,7 @@ fn launch(
     // Clean any stale iceoryx2 state so a fresh run starts clean.
     let _ = std::process::Command::new("sh")
         .arg("-c")
-        .arg("rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null; pkill -9 -f 'target/release/(feed|strategy|execution)' 2>/dev/null")
+        .arg("rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null; pkill -9 -f 'target/release/(exchange|strategy|execution)' 2>/dev/null")
         .status();
 
     let exe = |name: &str| -> String {
@@ -297,7 +297,9 @@ fn launch(
             .unwrap_or_else(|| format!("{manifest}/target/release/{name}"))
     };
 
-    // Execution (core 3) first, then strategy (core 2), then feed (core 1).
+    // Consumers first so they're attached before the exchange starts producing:
+    // execution (core 3), then strategy (core 2), then the exchange (core 1),
+    // which matches orders and is the market-data source.
     let execution = spawn_stage(&exe("execution"), &[("CPU_CORE", "3".into())], "exec", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
 
@@ -316,20 +318,20 @@ fn launch(
     let strategy = spawn_stage(&exe("strategy"), &strat_env, "strat", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
 
-    let feed = spawn_stage(
-        &exe("feed"),
+    let exchange = spawn_stage(
+        &exe("exchange"),
         &[
             ("CPU_CORE", "1".into()),
             ("VOL", format!("{}", p.vol)),
             ("TICK_US", format!("{}", p.tick_us)),
             ("SEED", "42".into()),
         ],
-        "feed",
+        "exch",
         &hub,
     )?;
 
     Ok(RunningPipeline {
-        children: vec![execution, strategy, feed],
+        children: vec![execution, strategy, exchange],
     })
 }
 

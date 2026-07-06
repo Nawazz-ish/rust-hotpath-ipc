@@ -101,9 +101,14 @@ pub const MARKET_SERVICE: &str = "Trading/Market/Ticks";
 pub const EXECUTION_SERVICE: &str = "Trading/Orders/Executions";
 
 /// Event (notification) service paired with `MARKET_SERVICE`. In WaitSet mode the
-/// feed notifies here after each publish so the strategy can block instead of
+/// consumer notifies here after each publish so the strategy can block instead of
 /// busy-poll; the tick data itself still travels over the pub/sub service.
 pub const MARKET_EVENT: &str = "Trading/Market/TickEvent";
+
+/// Top-of-book snapshots (best bid/ask + sizes), published by the exchange
+/// alongside the tick stream. Cold-path consumers and the UI read depth here
+/// without touching `MARKET_SERVICE`.
+pub const BOOK_SERVICE: &str = "Trading/Market/Book";
 
 // ============================================================================
 // UTILITIES

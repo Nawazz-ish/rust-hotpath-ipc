@@ -42,6 +42,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wait_mode = env::var("WAIT_MODE").unwrap_or_else(|_| "poll".into());
     let use_waitset = wait_mode == "waitset";
 
+    // Order style. Default sends marketable orders (cross the spread, fill now) so
+    // the latency windows match earlier runs. PASSIVE=1 posts limit orders at the
+    // near touch (bid to buy / ask to sell), which rest in the book and only fill
+    // once the queue ahead of them clears — so the exchange's queue-position and
+    // maker-fill behaviour is exercised end to end.
+    let passive = env::var("PASSIVE").map(|v| v == "1").unwrap_or(false);
+
     let node = NodeBuilder::new().create::<ipc::Service>()?;
 
     // Input: market ticks from the feed.
@@ -165,8 +172,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => println!("  mode: fixed composite strategy"),
     }
     println!(
-        "  wait_mode: {}  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
+        "  wait_mode: {}  order_style: {}  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
         if use_waitset { "waitset (blocking)" } else { "poll (busy-spin)" },
+        if passive { "passive (rest at touch)" } else { "marketable" },
         cfg.threshold,
         max_position,
         reporter_core,
@@ -261,20 +269,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             order_id += 1;
             // T1: the moment the strategy commits to sending this order.
             let t1 = rdtsc();
+            // Marketable (default): submit at the last price, order_type=market.
+            // Passive: rest at the near touch (bid to buy / ask to sell) as a limit.
+            let (order_price, order_type) = if passive {
+                let touch = match side {
+                    Side::Buy => tick.bid,
+                    Side::Sell => tick.ask,
+                };
+                // Fall back to last price if the touch isn't populated yet.
+                (if touch != 0 { touch } else { tick.price }, 1u8)
+            } else {
+                (tick.price, 0u8)
+            };
             let cmd = OrderCommand {
                 timestamp_ns: t1,
                 order_id,
-                price_ticks: tick.price, // marketable: submit at last price
-                quantity: 100_000_000,   // 1.0 unit
-                origin_ts: t0,           // carry T0 through for tick-to-fill downstream
+                price_ticks: order_price,
+                quantity: 100_000_000, // 1.0 unit
+                origin_ts: t0,         // carry T0 through for tick-to-fill downstream
                 symbol_id: tick.symbol_id,
                 user_id: 1,
                 side: match side {
                     Side::Buy => 0,
                     Side::Sell => 1,
                 },
-                order_type: 0, // market
-                action: 0,     // new
+                order_type,
+                action: 0, // new
                 flags: 0,
                 exchange_id: tick.exchange_id,
                 priority: 0,

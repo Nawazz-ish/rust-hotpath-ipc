@@ -16,6 +16,7 @@ The moving parts:
 - **Zero-copy IPC over shared memory.** Messages are published into and received from a lock-free shared-memory ring buffer. The payload is written once, in place, and read in place by the subscriber. Nothing is serialized, framed, or copied through a kernel socket buffer on the way across.
 - **RDTSC latency measurement with percentile aggregation.** Each message is timestamped with the CPU timestamp counter at send and at receive. On the receive thread the only work per message is one timestamp read and a push into a pre-allocated buffer; when a window fills, the buffer is handed to a separate reporter thread over a channel, and that thread does the sorting and printing. So the sort and the I/O never run on the pinned, real-time receive loop. Cycles are converted to nanoseconds using the crate's runtime-calibrated TSC frequency, not a hardcoded clock assumption. Results are reported as percentiles (min/p50/p99/p99.9/max), not an average, because the tail is what a trading path cares about.
 - **CPU core pinning and real-time scheduling.** Publisher and subscriber threads pin themselves to specific cores and, on Linux, raise themselves to `SCHED_FIFO` real-time priority, so the OS scheduler does not migrate them or preempt them mid-cycle.
+- **A real matching engine, not a loopback fill.** The `exchange` stage keeps a limit order book — two price-sorted sides with a FIFO queue at each price, so matching honours **price-time priority**. The strategy's orders cross the spread and fill against resting liquidity (walking several levels for size, i.e. partial fills), or, as passive limit orders, rest and fill only once the queue ahead of them clears (so **queue position** is real). Because a venue's price is whatever its book says, the exchange is also the market-data source: seeded synthetic participants post and cancel around a drifting fair value, and the top of that book becomes the `MarketTick` stream and the `OrderBookSnapshot` feed. The ticks the strategy sees and the fills it gets come from the *same* book, and `tick-to-fill` measures a genuine round-trip through the matcher rather than a loopback.
 
 ## Repository layout
 
@@ -30,16 +31,16 @@ src/
   latency_window.rs  the off-hot-path latency recorder (lock-free push, off-core aggregation)
   tsc_calibration.rs cycle <-> nanosecond calibration
   bin/
-    feed.rs          pipeline stage 1: publishes MarketTicks              } the trading
-    strategy.rs      pipeline stage 2: signal -> risk -> OrderCommand     } system —
-    execution.rs     pipeline stage 3: fills orders, tracks P&L           } run all three
+    exchange.rs      pipeline stage 1: order-book matching engine + market source } the trading
+    strategy.rs      pipeline stage 2: signal -> risk -> OrderCommand              } system —
+    execution.rs     pipeline stage 3: consumes fills, tracks position + P&L       } run all three
     control-server.rs serves the visual builder and launches the pipeline
     disasm.rs        tool: print the bytecode a strategy graph compiles to
     bench-publisher.rs / bench-subscriber.rs   a microbenchmark of raw iceoryx2 transport latency
 webui/               the drag-and-drop strategy builder (a thin UI over the real engine)
 ```
 
-The iceoryx2 calls all live in these binaries. The core sequence, from `feed.rs`: `publisher.loan_uninit()` borrows an uninitialized slot **that physically lives in the shared-memory segment**, `write_payload(tick)` writes the 64-byte message straight into that slot, and `send()` publishes by handing off the pointer — no copy. The consumer's `receive()` returns a reference to those same bytes, read in place. That `loan → write → send` / `receive` cycle, over POD messages that are safe to interpret byte-for-byte in another process, *is* the zero-copy path.
+The iceoryx2 calls all live in these binaries. The core sequence, from `exchange.rs`: `publisher.loan_uninit()` borrows an uninitialized slot **that physically lives in the shared-memory segment**, `write_payload(tick)` writes the 64-byte message straight into that slot, and `send()` publishes by handing off the pointer — no copy. The consumer's `receive()` returns a reference to those same bytes, read in place. That `loan → write → send` / `receive` cycle, over POD messages that are safe to interpret byte-for-byte in another process, *is* the zero-copy path.
 
 ## Attribution
 
@@ -108,13 +109,13 @@ The loss figure is intentional and worth reading: the publisher runs flat-out (t
 
 ## Custom-strategy execution latency (tick-to-trade)
 
-The benchmark above measures the *transport*. The more interesting number is how fast a **strategy** executes through the pipeline — the tick-to-trade window that runs through the decision logic, not the library. `make pipeline` runs the three-stage `feed -> strategy -> execution` flow and each stage reports three windows:
+The benchmark above measures the *transport*. The more interesting number is how fast a **strategy** executes through the pipeline — the tick-to-trade window that runs through the decision logic, not the library. `make pipeline` runs the three-stage `exchange -> strategy -> execution` flow and each stage reports three windows:
 
 - **decision-only** — the `Strategy::on_price()` call in isolation: three EMAs, a momentum reading, a rolling-window z-score, the weighted blend, and the threshold decision. Pure signal math, no IPC.
 - **tick-to-order** — from the origin tick's timestamp to the moment the strategy emits the order: decision plus one shared-memory hop.
 - **tick-to-fill** — from the origin tick to the fill: the full custom pipeline.
 
-**Measured** (AWS `c7i.xlarge`, Xeon 8488C, invariant TSC; feed core 1, strategy core 2, execution core 3, latency reporters core 0; hot stages under `SCHED_FIFO`):
+**Measured** (AWS `c7i.xlarge`, Xeon 8488C, invariant TSC; exchange core 1, strategy core 2, execution core 3, latency reporters core 0; the strategy under `SCHED_FIFO`):
 
 ```
 LAT decision-only  n=2000  min= 61  p50=  67  p99= 161  p999= 215  ns

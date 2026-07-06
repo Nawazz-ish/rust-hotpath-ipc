@@ -28,25 +28,29 @@ demo: build
 	CPU_CORE=$(PUB_CORE) ./target/release/bench-publisher; \
 	kill $$SUB_PID 2>/dev/null || true
 
-# Full three-stage custom-strategy pipeline with end-to-end latency windows.
-# feed -> strategy -> execution, pinned to cores 1/2/3; latency reporters on
-# core 0 (a core no hot loop owns). Each stage prints its `LAT` percentile lines:
-# strategy owns decision-only + tick-to-order, execution owns tick-to-fill.
-# SCHED_FIFO on the stages needs privilege — run `sudo make pipeline`.
-FEED_CORE ?= 1
+# Full custom-strategy pipeline with a real matching engine and end-to-end
+# latency windows. exchange -> strategy -> execution, pinned to cores 1/2/3;
+# latency reporters on core 0 (a core no hot loop owns). The exchange runs the
+# order book + synthetic market and is the market-data source; the strategy
+# decides and sends orders; execution accounts the fills. Each stage prints its
+# `LAT` percentile lines: strategy owns decision-only + tick-to-order, execution
+# owns tick-to-fill. SCHED_FIFO on the strategy needs privilege — run `sudo make
+# pipeline`. Set PASSIVE=1 to have the strategy post resting limit orders.
+EXCH_CORE ?= 1
 STRAT_CORE ?= 2
 EXEC_CORE ?= 3
 TICK_US ?= 40
 THRESHOLD ?= 0.25
 MAX_POSITION ?= 3
+PASSIVE ?= 0
 pipeline: build
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
-	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), feed (core $(FEED_CORE)); reporters on core $(REPORTER_CORE)"
+	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), exchange (core $(EXCH_CORE)); reporters on core $(REPORTER_CORE)"
 	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
 	sleep 1; \
-	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) ./target/release/strategy & S=$$!; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) PASSIVE=$(PASSIVE) ./target/release/strategy & S=$$!; \
 	sleep 1; \
-	CPU_CORE=$(FEED_CORE) TICK_US=$(TICK_US) ./target/release/feed; \
+	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
 	kill $$S $$E 2>/dev/null || true
 
 # Visual strategy builder: control server + web UI on :8080, driving the real

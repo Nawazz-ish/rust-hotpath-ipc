@@ -71,7 +71,7 @@
   #console { flex: 1; overflow-y: auto; padding: 10px 12px; font: 11px/1.45 ui-monospace, Menlo, monospace;
     background: #0a0e14; }
   .ln { white-space: pre-wrap; margin: 1px 0; }
-  .ln.feed { color: #6e7681; }
+  .ln.exch { color: #6e7681; }
   .ln.strat { color: #79c0ff; }
   .ln.exec { color: #7ee787; }
   .ln.buy { color: var(--green); }
@@ -147,7 +147,7 @@
       <div class="krow"><span>Reversion weight</span><input id="w_rev" type="range" min="0" max="1" step="0.05" value="0.2"><span class="val" id="w_rev_v">0.20</span></div>
       <div class="krow"><span>Signal threshold</span><input id="thr" type="range" min="0.1" max="0.6" step="0.01" value="0.25"><span class="val" id="thr_v">0.25</span></div>
       <div class="krow"><span>Max position</span><input id="maxpos" type="range" min="1" max="10" step="1" value="3"><span class="val" id="maxpos_v">3</span></div>
-      <div class="krow"><span>Feed volatility</span><input id="vol" type="range" min="2" max="16" step="1" value="8"><span class="val" id="vol_v">8</span></div>
+      <div class="krow"><span>Market volatility</span><input id="vol" type="range" min="2" max="16" step="1" value="8"><span class="val" id="vol_v">8</span></div>
     </div>
     <div id="stats">
       <div class="stat"><div class="k">Orders</div><div class="v" id="s_orders">0</div></div>
@@ -370,7 +370,7 @@ const cons = document.getElementById("console");
 function line(text) {
   const d = document.createElement("div");
   d.className = "ln";
-  if (text.includes("[feed]")) d.classList.add("feed");
+  if (text.includes("[exch]")) d.classList.add("exch");
   else if (text.includes("[strat]")) d.classList.add("strat");
   else if (text.includes("[exec]")) d.classList.add("exec");
   else if (text.includes("[control]")) d.classList.add("ctrl");

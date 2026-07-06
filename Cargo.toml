@@ -32,9 +32,9 @@ tiny_http = "0.12"
 # All runnable processes are first-class binaries under src/bin/, in two groups:
 #
 #   Trading pipeline (the system) — run as three pinned processes over the bus:
-#     feed        stage 1: publishes MarketTicks
+#     exchange    stage 1: order-book matching engine + market-data source
 #     strategy    stage 2: signal -> risk -> OrderCommand
-#     execution   stage 3: fills orders, tracks P&L, publishes ExecutionReports
+#     execution   stage 3: consumes fills, tracks position + P&L
 #     disasm      tool: dump the bytecode a strategy graph compiles to
 #
 #   Transport benchmark (a microbenchmark of raw iceoryx2 latency, not the
