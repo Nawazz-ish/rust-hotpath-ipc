@@ -509,13 +509,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let orders = order_svc.subscriber_builder().create()?;
 
     // How the exchange waits for the next order:
-    //   poll    (default) — busy-poll `receive()` continuously; lowest overhead
-    //                       when order flow is dense, but under *sparse* flow the
-    //                       cross-core visibility of a lone write dominates.
+    //   poll    (default) — busy-poll `receive()` continuously. This is the
+    //                       default because it wins on both latency and
+    //                       throughput: measured on the c7i, poll and waitset had
+    //                       the same tick-to-fill (~81us, so latency is a wash),
+    //                       but poll processed several times more orders per run.
     //   waitset           — block on an order-event listener with a timeout equal
-    //                       to the participant cadence, so the exchange wakes the
-    //                       instant an order is notified (targeted wake-up) and
-    //                       otherwise wakes to run the synthetic market.
+    //                       to the participant cadence, waking the instant an order
+    //                       is notified. Same latency as poll but ~7x less CPU
+    //                       (100% -> ~15%) at the cost of throughput — the choice
+    //                       when the exchange is not the latency-critical path and
+    //                       you want the core back.
+    //
+    // The latency floor here (~78us) is the same in both modes because it is the
+    // cross-core visibility of a sparsely-written cache line, not the poll cadence;
+    // neither poll nor waitset changes when the shared-memory write becomes visible.
     let order_wait = env_or::<String>("ORDER_WAIT", "poll".into());
     let use_order_waitset = order_wait == "waitset";
     let order_event = node
