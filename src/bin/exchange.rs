@@ -29,7 +29,8 @@ use iceoryx2::prelude::*;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::{thread, time::Duration};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rust_hotpath_ipc::hot_path::*;
 use rust_hotpath_ipc::runtime::{env_or, pin_only};
@@ -572,25 +573,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         participants.act(&mut book, &mut fills);
     }
 
+    // A real matcher matches on order *arrival*, not on a timer. So the hot loop
+    // busy-polls incoming orders and matches them immediately; the synthetic
+    // participants (the "market", not the matching path) run on a separate,
+    // paced cadence. This keeps an order's time-to-fill down to the match plus
+    // one shared-memory hop, instead of making it wait for the next paced round.
+    //
+    // The cadence is checked with `Instant` only when no order is pending — a
+    // vDSO read off the tightest match path, not a syscall on it. tick_us == 0
+    // means run participants every iteration (full speed, no pacing).
+    let participant_period = Duration::from_micros(tick_us);
+    let mut last_participant = Instant::now();
+
     while running.load(Ordering::Relaxed) {
-        // 1) Drain and match every pending strategy order.
+        // 1) HOT: match any pending order right now. This is the latency path.
+        let mut got_order = false;
         while let Some(sample) = orders.receive()? {
+            got_order = true;
             let cmd: OrderCommand = *sample;
             fills.clear();
             match_strategy_order(&mut book, &cmd, &mut fills);
             publish_fills(&reports, &cmd, &fills, fee_bps)?;
         }
 
-        // 2) One round of synthetic participant activity.
-        fills.clear();
-        participants.act(&mut book, &mut fills);
-        // Synthetic makers/takers produce no strategy fills to report; their fills
-        // only move the book. (A synthetic taker hitting a *strategy* maker would
-        // matter, but the strategy currently only takes; if PASSIVE resting is
-        // added, publish_fills already reports non-synthetic makers.)
-        publish_strategy_maker_fills(&reports, &fills, fee_bps)?;
+        // 2) PACED: run one round of synthetic market activity only when the
+        // cadence has elapsed — this is the "market", not the matching path, so
+        // it must not gate how fast an order fills.
+        let due = tick_us == 0 || last_participant.elapsed() >= participant_period;
+        if due {
+            last_participant = Instant::now();
+            fills.clear();
+            participants.act(&mut book, &mut fills);
+            // If the strategy is resting passive orders and a synthetic taker hits
+            // one, the strategy is the maker on that fill — report those.
+            publish_strategy_maker_fills(&reports, &fills, fee_bps)?;
+        } else if !got_order {
+            // Nothing to match and no round due: yield the core briefly so we
+            // don't spin at 100% between paced rounds.
+            std::hint::spin_loop();
+        }
 
-        // 3) Publish top-of-book if it moved.
+        // 3) Publish top-of-book if it moved (after either an order match or a
+        // participant round).
         let bid = book.best_bid().unwrap_or(0);
         let ask = book.best_ask().unwrap_or(0);
         if bid != last_bid || ask != last_ask {
@@ -644,12 +668,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ask as f64 / SCALE
                 );
             }
-        }
-
-        if tick_us > 0 {
-            thread::sleep(Duration::from_micros(tick_us));
-        } else {
-            std::hint::spin_loop();
         }
     }
 
