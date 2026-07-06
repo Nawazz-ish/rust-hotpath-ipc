@@ -80,6 +80,34 @@ These will not reproduce exactly on other hardware: absolute latency depends on 
 
 The loss figure is intentional and worth reading: the publisher runs flat-out (tens of millions of messages per second) into a bounded ring with safe-overflow enabled, so under a hard imbalance the ring drops rather than blocks the producer — a deliberate choice for a market-data-style path where the freshest message matters more than delivering every stale one. Sizing the ring, batching the consumer, or rate-matching the producer all move that number; it is a knob, not a defect.
 
+## Custom-strategy execution latency (tick-to-trade)
+
+The benchmark above measures the *transport*. The more interesting number is how fast a **strategy** executes through the pipeline — the tick-to-trade window that runs through the decision logic, not the library. `make pipeline` runs the three-stage `feed -> strategy -> execution` flow and each stage reports three windows:
+
+- **decision-only** — the `Strategy::on_price()` call in isolation: three EMAs, a momentum reading, a rolling-window z-score, the weighted blend, and the threshold decision. Pure signal math, no IPC.
+- **tick-to-order** — from the origin tick's timestamp to the moment the strategy emits the order: decision plus one shared-memory hop.
+- **tick-to-fill** — from the origin tick to the fill: the full custom pipeline.
+
+**Measured** (AWS `c7i.xlarge`, Xeon 8488C, invariant TSC; feed core 1, strategy core 2, execution core 3, latency reporters core 0; hot stages under `SCHED_FIFO`):
+
+```
+LAT decision-only  n=2000  min= 61  p50=  67  p99= 161  p999= 215  ns
+LAT tick-to-order  n= 47   min=710  p50= 805  p99=1278  p999=1278  ns
+LAT tick-to-fill   n= 41   min=1493 p50=1781  p99=2685  p999=2685  ns
+```
+
+Reading the breakdown:
+
+- **The strategy decides in ~67 ns** at p50 — the whole composite signal, per tick.
+- **tick-to-order ≈ 850 ns**; subtract the ~67 ns of decision and the remainder (~780 ns) is one Iceoryx2 shared-memory hop — which matches the transport benchmark's ~850 ns/P50 above, an independent confirmation of both numbers.
+- **tick-to-fill ≈ 1.75 µs**; the second ~900 ns is the strategy→execution hop plus the fill.
+
+So of the ~1.75 µs it takes a market tick to become a fill, the decision logic is ~67 ns and the rest is IPC and transport. That decomposition — *how much is my code versus the framework* — is the point of measuring it this way.
+
+**Not perturbing the measurement.** The per-sample cost on the hot path is a timestamp read, a subtract, one float multiply, and a push into a pre-allocated buffer; all sorting and printing happen on a reporter thread pinned to a separate core. The decision-only window is short enough (tens of ns) that the timestamp read itself is a material fraction, so it uses a serializing read (`rdtscp`/`lfence`, so the CPU can't reorder work out of the window) and subtracts a read overhead calibrated at startup. The larger windows are hundreds of ns to µs, where the ~6 ns read is noise, so they use a plain read and no correction. Cross-stage deltas subtract timestamps taken on different cores, which is valid here because this CPU's TSC is invariant and synchronized across cores.
+
+The visual builder (`make studio`, then open `:8080`) shows these three windows and the decision-vs-transport breakdown live while a strategy you draw runs.
+
 ## What I'd do next
 
 This is a focused slice, and there are clear next steps I deliberately left out to keep it honest and small:
