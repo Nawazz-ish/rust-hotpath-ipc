@@ -508,6 +508,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_or_create()?;
     let orders = order_svc.subscriber_builder().create()?;
 
+    // How the exchange waits for the next order:
+    //   poll    (default) — busy-poll `receive()` continuously; lowest overhead
+    //                       when order flow is dense, but under *sparse* flow the
+    //                       cross-core visibility of a lone write dominates.
+    //   waitset           — block on an order-event listener with a timeout equal
+    //                       to the participant cadence, so the exchange wakes the
+    //                       instant an order is notified (targeted wake-up) and
+    //                       otherwise wakes to run the synthetic market.
+    let order_wait = env_or::<String>("ORDER_WAIT", "poll".into());
+    let use_order_waitset = order_wait == "waitset";
+    let order_event = node
+        .service_builder(&ORDER_EVENT.try_into()?)
+        .event()
+        .open_or_create()?;
+    let order_listener = order_event.listener_builder().create()?;
+
     // Output: market ticks (top of book) + the event notify for WaitSet consumers.
     let market_svc = node
         .service_builder(&MARKET_SERVICE.try_into()?)
@@ -552,7 +568,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  out:  {} (ticks) / {} (book) / {} (fills)",
         MARKET_SERVICE, BOOK_SERVICE, EXECUTION_SERVICE
     );
-    println!("  seed={seed} vol={vol} tick={tick_us}us");
+    println!(
+        "  seed={seed} vol={vol} tick={tick_us}us  order_wait={}",
+        if use_order_waitset {
+            "waitset (blocking)"
+        } else {
+            "poll (busy-spin)"
+        }
+    );
     println!("waiting 2s for the strategy to attach...");
     thread::sleep(Duration::from_secs(2));
 
@@ -608,9 +631,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // one, the strategy is the maker on that fill — report those.
             publish_strategy_maker_fills(&reports, &fills, fee_bps)?;
         } else if !got_order {
-            // Nothing to match and no round due: yield the core briefly so we
-            // don't spin at 100% between paced rounds.
-            std::hint::spin_loop();
+            // Nothing to match and no round due. In poll mode, spin. In waitset
+            // mode, block on the order-event listener until either an order is
+            // notified (targeted wake-up — fills the moment the strategy sends) or
+            // the participant cadence elapses (so the synthetic market still runs).
+            if use_order_waitset {
+                let until_next = participant_period.saturating_sub(last_participant.elapsed());
+                let timeout = if until_next.is_zero() {
+                    Duration::from_micros(1)
+                } else {
+                    until_next
+                };
+                let _ = order_listener.timed_wait_one(timeout);
+            } else {
+                std::hint::spin_loop();
+            }
         }
 
         // 3) Publish top-of-book if it moved (after either an order match or a

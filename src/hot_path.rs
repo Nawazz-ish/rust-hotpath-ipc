@@ -110,6 +110,12 @@ pub const MARKET_EVENT: &str = "Trading/Market/TickEvent";
 /// without touching `MARKET_SERVICE`.
 pub const BOOK_SERVICE: &str = "Trading/Market/Book";
 
+/// Event (notification) service paired with `ORDER_SERVICE`. When the exchange
+/// runs in ORDER_WAIT=waitset mode it blocks on this listener instead of
+/// busy-polling `receive()`; the strategy notifies here after each order send.
+/// Orders themselves still travel over the pub/sub `ORDER_SERVICE`.
+pub const ORDER_EVENT: &str = "Trading/Orders/CommandEvent";
+
 // ============================================================================
 // UTILITIES
 // ============================================================================

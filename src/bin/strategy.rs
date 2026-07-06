@@ -81,6 +81,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_or_create()?;
     let orders = orders_svc.publisher_builder().create()?;
 
+    // Event notifier paired with the order service. When the exchange runs in
+    // waitset mode it blocks on the matching listener instead of busy-polling, so
+    // we signal here after each send. In poll mode the exchange ignores this and
+    // the notify is a cheap no-op-ish call.
+    let order_event = node
+        .service_builder(&ORDER_EVENT.try_into()?)
+        .event()
+        .open_or_create()?;
+    let order_notifier = order_event.notifier_builder().create()?;
+
     // The strategy is fully env-tunable so the same binary can be driven by the
     // visual builder (which passes signal weights and thresholds) without a
     // rebuild. Any unset knob keeps its default.
@@ -311,6 +321,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let out = orders.loan_uninit()?;
             let out = out.write_payload(cmd);
             out.send()?;
+            // Wake a waitset-mode exchange; ignored (and cheap) in poll mode.
+            let _ = order_notifier.notify();
             orders_sent += 1;
 
             // tick-to-order window: origin tick (T0) -> order emitted (T1).
