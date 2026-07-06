@@ -108,6 +108,22 @@ So of the ~1.75 µs it takes a market tick to become a fill, the decision logic 
 
 The visual builder (`make studio`, then open `:8080`) shows these three windows and the decision-vs-transport breakdown live while a strategy you draw runs.
 
+## Waiting for the next tick: busy-poll vs. blocking
+
+The pipeline is event-driven at the granularity of a tick — every market tick is an event that drives one decision. *How* the strategy waits for that event is the classic hot-path tradeoff, and the strategy supports both (`WAIT_MODE=poll|waitset`):
+
+- **poll (default)** — the receive loop busy-spins on `receive()`, never sleeping. The instant a tick lands in shared memory the next loop iteration sees it. Lowest latency; costs a dedicated core.
+- **waitset** — the feed publishes an iceoryx2 event notification after each tick, and the strategy blocks on the matching listener (`blocking_wait_one`) until signalled, then drains. The core is free between ticks; the price is wake-up latency (a kernel context switch and scheduler dispatch to go from blocked to running).
+
+Measured on the c7i (`tick-to-order` p50, and the strategy process's CPU):
+
+| mode | tick-to-order p50 | p99 | strategy CPU |
+|---|---:|---:|---:|
+| poll (busy-spin) | ~1.08 µs | ~1.4 µs | ~99% (one core) |
+| waitset (blocking) | ~8.0 µs | ~19 µs | ~3% |
+
+So blocking frees the core but adds ~7 µs of wake-up latency — about 7× the busy-poll number. That is exactly why a trading system busy-polls the critical path (spend a core to eliminate wake-up latency) and reserves blocking waits for cold-path consumers (audit, metrics, recording) where a few microseconds do not matter and CPU efficiency does. The default here is `poll`; `WAIT_MODE=waitset` demonstrates the other end of the tradeoff.
+
 ## Graph-defined strategies compiled to bytecode
 
 The strategy above is hand-written Rust. The visual builder lets you *draw* a strategy from nodes (indicators, conditions, logic gates, buy/sell signals), and that graph is not just tuning parameters — it is **compiled to a flat bytecode program and interpreted per tick**. Change the wiring and the emitted program changes, so the drawn graph genuinely drives execution.
