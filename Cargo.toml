@@ -29,26 +29,21 @@ ctrlc = "3.4"
 # tooling, not on the hot path).
 tiny_http = "0.12"
 
-[[example]]
-name = "publisher"
-path = "examples/publisher.rs"
-
-[[example]]
-name = "subscriber"
-path = "examples/subscriber.rs"
-
-# Three-stage trading pipeline: feed -> strategy -> execution.
-[[example]]
-name = "feed"
-path = "examples/feed.rs"
-
-[[example]]
-name = "strategy"
-path = "examples/strategy.rs"
-
-[[example]]
-name = "execution"
-path = "examples/execution.rs"
+# All runnable processes are first-class binaries under src/bin/, in two groups:
+#
+#   Trading pipeline (the system) — run as three pinned processes over the bus:
+#     feed        stage 1: publishes MarketTicks
+#     strategy    stage 2: signal -> risk -> OrderCommand
+#     execution   stage 3: fills orders, tracks P&L, publishes ExecutionReports
+#     disasm      tool: dump the bytecode a strategy graph compiles to
+#
+#   Transport benchmark (a microbenchmark of raw iceoryx2 latency, not the
+#   pipeline) — two processes measuring per-message publish/receive latency:
+#     bench-publisher / bench-subscriber
+#
+# These are auto-discovered from src/bin/, so they need no explicit [[bin]]
+# entries. Only control-server needs one, to override its target name (the file
+# is control_server.rs but the binary is control-server).
 
 # Control server for the visual strategy builder (serves webui/, launches the
 # pipeline, streams orders + P&L to the browser). Not on the hot path.

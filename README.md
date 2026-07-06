@@ -17,6 +17,30 @@ The moving parts:
 - **RDTSC latency measurement with percentile aggregation.** Each message is timestamped with the CPU timestamp counter at send and at receive. On the receive thread the only work per message is one timestamp read and a push into a pre-allocated buffer; when a window fills, the buffer is handed to a separate reporter thread over a channel, and that thread does the sorting and printing. So the sort and the I/O never run on the pinned, real-time receive loop. Cycles are converted to nanoseconds using the crate's runtime-calibrated TSC frequency, not a hardcoded clock assumption. Results are reported as percentiles (min/p50/p99/p99.9/max), not an average, because the tail is what a trading path cares about.
 - **CPU core pinning and real-time scheduling.** Publisher and subscriber threads pin themselves to specific cores and, on Linux, raise themselves to `SCHED_FIFO` real-time priority, so the OS scheduler does not migrate them or preempt them mid-cycle.
 
+## Repository layout
+
+The library (`src/`) is transport-agnostic logic; the runnable processes (`src/bin/`) are where that logic is wired onto the shared-memory bus. The strategy, the bytecode VM, and the latency recorder have no dependency on the IPC layer at all — only the process binaries touch iceoryx2. That split is deliberate: the decision logic is a pure function of the price stream, and the transport is swappable underneath it.
+
+```
+src/
+  hot_path.rs        the 64-byte POD message contract + rdtsc()  (the wire types iceoryx2 carries)
+  strategy.rs        composite trend / momentum / mean-reversion strategy
+  compiler.rs        a drawn strategy graph  ->  a flat bytecode program
+  bytecode.rs        a stack VM that interprets that program, once per tick
+  latency_window.rs  the off-hot-path latency recorder (lock-free push, off-core aggregation)
+  tsc_calibration.rs cycle <-> nanosecond calibration
+  bin/
+    feed.rs          pipeline stage 1: publishes MarketTicks              } the trading
+    strategy.rs      pipeline stage 2: signal -> risk -> OrderCommand     } system —
+    execution.rs     pipeline stage 3: fills orders, tracks P&L           } run all three
+    control-server.rs serves the visual builder and launches the pipeline
+    disasm.rs        tool: print the bytecode a strategy graph compiles to
+    bench-publisher.rs / bench-subscriber.rs   a microbenchmark of raw iceoryx2 transport latency
+webui/               the drag-and-drop strategy builder (a thin UI over the real engine)
+```
+
+The iceoryx2 calls all live in these binaries. The core sequence, from `feed.rs`: `publisher.loan_uninit()` borrows an uninitialized slot **that physically lives in the shared-memory segment**, `write_payload(tick)` writes the 64-byte message straight into that slot, and `send()` publishes by handing off the pointer — no copy. The consumer's `receive()` returns a reference to those same bytes, read in place. That `loan → write → send` / `receive` cycle, over POD messages that are safe to interpret byte-for-byte in another process, *is* the zero-copy path.
+
 ## Attribution
 
 I want to be exact about what is mine and what is not, because it matters for reviewing this honestly.
@@ -60,7 +84,7 @@ Each of these is a trade-off, so here is the reasoning, not just the choice.
 make demo
 ```
 
-This starts a subscriber and a publisher as separate processes over the shared-memory service, streams a burst of messages between them, and prints a latency percentile table gathered from the RDTSC deltas once the run completes.
+This starts the `bench-subscriber` and `bench-publisher` binaries as separate processes over the shared-memory service, streams a burst of messages between them, and prints a latency percentile table gathered from the RDTSC deltas once the run completes. (This measures raw transport; `make pipeline` measures a strategy running end-to-end — see below.)
 
 Each line is one 100,000-message window: a single publisher and a single subscriber pinned to separate cores, with the reporter pinned to a third so sorting and printing never touch the receive loop.
 
@@ -160,7 +184,7 @@ The obvious follow-up — is the interpreter really doing the work, or is the op
 
 Latency grows roughly linearly at ~5–6 ns per op (~15–18 cycles), exactly what a match-dispatch plus a couple of arithmetic ops per instruction should cost. If the VM were being optimized away the three would be indistinguishable; instead the cost tracks the work, which is the evidence that the interpreter is genuinely executing the compiled graph.
 
-A note on faithful compilation: the compiler rejects ambiguous graphs (e.g. two indicators wired straight into one condition) with a clear error rather than silently dropping an input, so the disassembly always matches the graph you drew. Use `cargo run --example disasm -- graph.json` to see the compiled bytecode for any graph.
+A note on faithful compilation: the compiler rejects ambiguous graphs (e.g. two indicators wired straight into one condition) with a clear error rather than silently dropping an input, so the disassembly always matches the graph you drew. Use `cargo run --bin disasm -- graph.json` to see the compiled bytecode for any graph.
 
 ## What I'd do next
 

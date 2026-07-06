@@ -1,5 +1,5 @@
 //! Compile a strategy graph JSON and print its bytecode disassembly.
-//! Usage: cargo run --example disasm -- path/to/graph.json
+//! Usage: cargo run --bin disasm -- path/to/graph.json
 use rust_hotpath_ipc::{bytecode::Vm, compiler};
 fn main() {
     let path = std::env::args().nth(1).expect("usage: disasm <graph.json>");

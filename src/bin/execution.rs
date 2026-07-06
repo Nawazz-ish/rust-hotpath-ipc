@@ -6,7 +6,7 @@
 //! the demo shows the strategy actually making or losing money on the synthetic
 //! series.
 //!
-//! Run with:  CPU_CORE=3 cargo run --release --example execution
+//! Run with:  CPU_CORE=3 cargo run --release --bin execution
 
 use core_affinity::CoreId;
 use iceoryx2::prelude::*;

@@ -5,7 +5,7 @@
 .PHONY: build test demo pipeline studio bench docker-build docker-run clean fmt clippy
 
 build:
-	cargo build --release --examples --bin control-server
+	cargo build --release --bins
 
 test:
 	cargo test
@@ -20,12 +20,12 @@ PUB_CORE ?= 2
 SUB_CORE ?= 3
 REPORTER_CORE ?= 0
 demo: build
-	@echo "starting subscriber on core $(SUB_CORE) (reporter on core $(REPORTER_CORE))..."
-	CPU_CORE=$(SUB_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/examples/subscriber & \
+	@echo "starting bench-subscriber on core $(SUB_CORE) (reporter on core $(REPORTER_CORE))..."
+	CPU_CORE=$(SUB_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/bench-subscriber & \
 	SUB_PID=$$!; \
 	sleep 3; \
-	echo "starting publisher on core $(PUB_CORE)..."; \
-	CPU_CORE=$(PUB_CORE) ./target/release/examples/publisher; \
+	echo "starting bench-publisher on core $(PUB_CORE)..."; \
+	CPU_CORE=$(PUB_CORE) ./target/release/bench-publisher; \
 	kill $$SUB_PID 2>/dev/null || true
 
 # Full three-stage custom-strategy pipeline with end-to-end latency windows.
@@ -42,11 +42,11 @@ MAX_POSITION ?= 3
 pipeline: build
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), feed (core $(FEED_CORE)); reporters on core $(REPORTER_CORE)"
-	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/examples/execution & E=$$!; \
+	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
 	sleep 1; \
-	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) ./target/release/examples/strategy & S=$$!; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) ./target/release/strategy & S=$$!; \
 	sleep 1; \
-	CPU_CORE=$(FEED_CORE) TICK_US=$(TICK_US) ./target/release/examples/feed; \
+	CPU_CORE=$(FEED_CORE) TICK_US=$(TICK_US) ./target/release/feed; \
 	kill $$S $$E 2>/dev/null || true
 
 # Visual strategy builder: control server + web UI on :8080, driving the real
@@ -56,7 +56,7 @@ studio: build
 	./target/release/control-server
 
 bench:
-	cargo build --release --examples
+	cargo build --release --bins
 	@echo "run 'make demo' (transport benchmark) or 'sudo make pipeline' (custom-strategy latency)"
 
 docker-build:

@@ -4,7 +4,7 @@
 //! `OrderCommand` messages over Iceoryx2 on the order service, measuring
 //! per-publish latency in TSC cycles.
 //!
-//! Run with:  CPU_CORE=2 cargo run --release --example publisher
+//! Run with:  CPU_CORE=2 cargo run --release --bin bench-publisher
 //! (reliable core pinning + real-time priority may require sudo on Linux)
 
 use core_affinity::CoreId;

@@ -281,22 +281,24 @@ fn launch(
     // Clean any stale iceoryx2 state so a fresh run starts clean.
     let _ = std::process::Command::new("sh")
         .arg("-c")
-        .arg("rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null; pkill -9 -f 'release/examples/(feed|strategy|execution)' 2>/dev/null")
+        .arg("rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null; pkill -9 -f 'target/release/(feed|strategy|execution)' 2>/dev/null")
         .status();
 
     let exe = |name: &str| -> String {
-        // Resolve the release example binary whether the server was started from
-        // the repo root or elsewhere (e.g. a launcher with a different cwd).
+        // Resolve the release binary whether the server was started from the repo
+        // root or elsewhere (e.g. a launcher with a different cwd). The pipeline
+        // stages are first-class binaries, so they live directly in
+        // target/release/ (not target/release/examples/).
         let manifest = env!("CARGO_MANIFEST_DIR");
         let candidates = [
-            format!("target/release/examples/{name}"),
-            format!("./target/release/examples/{name}"),
-            format!("{manifest}/target/release/examples/{name}"),
+            format!("target/release/{name}"),
+            format!("./target/release/{name}"),
+            format!("{manifest}/target/release/{name}"),
         ];
         candidates
             .into_iter()
             .find(|c| std::path::Path::new(c).exists())
-            .unwrap_or_else(|| format!("{manifest}/target/release/examples/{name}"))
+            .unwrap_or_else(|| format!("{manifest}/target/release/{name}"))
     };
 
     // Execution (core 3) first, then strategy (core 2), then feed (core 1).

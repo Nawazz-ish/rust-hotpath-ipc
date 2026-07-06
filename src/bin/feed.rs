@@ -7,7 +7,7 @@
 //! to. In a real deployment this process would wrap an exchange websocket
 //! adapter; the rest of the pipeline is identical either way.
 //!
-//! Run with:  CPU_CORE=1 TICK_US=100 cargo run --release --example feed
+//! Run with:  CPU_CORE=1 TICK_US=100 cargo run --release --bin feed
 
 use core_affinity::CoreId;
 use iceoryx2::prelude::*;

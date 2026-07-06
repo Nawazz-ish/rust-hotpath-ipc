@@ -9,7 +9,7 @@
 //! service, emit orders on another, with the decision logic in between and no
 //! database or network on the path.
 //!
-//! Run with:  CPU_CORE=2 cargo run --release --example strategy
+//! Run with:  CPU_CORE=2 cargo run --release --bin strategy
 
 use core_affinity::CoreId;
 use iceoryx2::prelude::*;

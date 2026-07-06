@@ -12,7 +12,7 @@
 //!     hot path.
 //!
 //! Run alongside the publisher example:
-//!   CPU_CORE=3 cargo run --release --example subscriber
+//!   CPU_CORE=3 cargo run --release --bin bench-subscriber
 
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
