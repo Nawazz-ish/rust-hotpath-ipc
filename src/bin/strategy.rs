@@ -222,7 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Periodic heartbeat so the demo shows the strategy is alive and what
         // the signals look like even during quiet stretches.
-        if ticks_seen % 50_000 == 0 {
+        if ticks_seen.is_multiple_of(50_000) {
             let (trend, mom, rev) = strat.signals();
             println!(
                 "  .. {} ticks, px={:.2}  signals[trend={:+.2} mom={:+.2} rev={:+.2}]  orders={}",

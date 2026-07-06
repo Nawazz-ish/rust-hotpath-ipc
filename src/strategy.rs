@@ -318,9 +318,11 @@ mod tests {
 
     #[test]
     fn cooldown_blocks_repeat_same_side() {
-        let mut cfg = StrategyConfig::default();
-        cfg.cooldown_ticks = 50;
-        cfg.threshold = 0.0; // fire on any nonzero score
+        let cfg = StrategyConfig {
+            cooldown_ticks: 50,
+            threshold: 0.0, // fire on any nonzero score
+            ..StrategyConfig::default()
+        };
         let mut s = Strategy::new(cfg);
         let mut price = 100.0;
         let mut buys = 0;

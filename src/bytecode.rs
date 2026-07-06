@@ -367,7 +367,7 @@ impl Vm {
                 }
                 Op::Not => {
                     let a = self.pop();
-                    self.push(bool_f64(!(a > 0.0)));
+                    self.push(bool_f64(a <= 0.0));
                 }
                 Op::Buy => {
                     let c = self.pop();

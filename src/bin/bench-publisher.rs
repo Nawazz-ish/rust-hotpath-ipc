@@ -101,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_publish_cycles += publish_end.wrapping_sub(publish_start);
         publish_count += 1;
 
-        if seq % 100_000 == 0 {
+        if seq.is_multiple_of(100_000) {
             let avg_cycles = total_publish_cycles / publish_count;
             let avg_ns = fast_cycles_to_ns(avg_cycles);
             println!(

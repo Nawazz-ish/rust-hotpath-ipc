@@ -151,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Wake any WaitSet-mode consumer. Cheap; ignored by busy-poll consumers.
         let _ = notifier.notify();
 
-        if seq % 50_000 == 0 {
+        if seq.is_multiple_of(50_000) {
             println!("feed: {} ticks, price={:.2}", seq, price);
         }
 

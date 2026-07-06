@@ -106,9 +106,7 @@ fn serve_events(request: tiny_http::Request, hub: Arc<Mutex<Hub>>) {
     hub.lock().unwrap().subscribers.push(tx);
 
     // We must write the SSE stream manually to keep the connection open.
-    let mut writer = match request.into_writer() {
-        w => w,
-    };
+    let mut writer = request.into_writer();
     let head = "HTTP/1.1 200 OK\r\n\
                 Content-Type: text/event-stream\r\n\
                 Cache-Control: no-cache\r\n\
@@ -229,9 +227,7 @@ impl StrategyParams {
             let rest = &body[idx + pat.len()..];
             let colon = rest.find(':')?;
             let after = &rest[colon + 1..];
-            let end = after
-                .find(|c: char| c == ',' || c == '}')
-                .unwrap_or(after.len());
+            let end = after.find([',', '}']).unwrap_or(after.len());
             after[..end].trim().trim_matches('"').parse::<f64>().ok()
         };
         if let Some(v) = get("weight_trend") {
