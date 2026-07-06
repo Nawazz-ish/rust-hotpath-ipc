@@ -113,23 +113,25 @@ The benchmark above measures the *transport*. The more interesting number is how
 
 - **decision-only** — the `Strategy::on_price()` call in isolation: three EMAs, a momentum reading, a rolling-window z-score, the weighted blend, and the threshold decision. Pure signal math, no IPC.
 - **tick-to-order** — from the origin tick's timestamp to the moment the strategy emits the order: decision plus one shared-memory hop.
-- **tick-to-fill** — from the origin tick to the fill: the full custom pipeline.
+- **tick-to-fill** — from the origin tick to the fill: the full round-trip out to the matching engine and back.
 
-**Measured** (AWS `c7i.xlarge`, Xeon 8488C, invariant TSC; exchange core 1, strategy core 2, execution core 3, latency reporters core 0; the strategy under `SCHED_FIFO`):
+**Measured** (AWS `c7i.xlarge`, Xeon 8488C, invariant TSC; exchange core 1, strategy core 2, execution core 3, latency reporters core 0; the strategy under `SCHED_FIFO`; marketable orders):
 
 ```
-LAT decision-only  n=2000  min= 61  p50=  67  p99= 161  p999= 215  ns
-LAT tick-to-order  n= 47   min=710  p50= 805  p99=1278  p999=1278  ns
-LAT tick-to-fill   n= 41   min=1493 p50=1781  p99=2685  p999=2685  ns
+LAT decision-only  n=2000  min= 63  p50=  69  p99= 146  p999= 240  ns
+LAT tick-to-order  n= 251  min=717  p50= 880  p99=1205  p999=1645  ns
+LAT tick-to-fill   n= 253  min=75200 p50=76623 p99=93107 p999=130074 ns
 ```
 
 Reading the breakdown:
 
-- **The strategy decides in ~67 ns** at p50 — the whole composite signal, per tick.
-- **tick-to-order ≈ 850 ns**; subtract the ~67 ns of decision and the remainder (~780 ns) is one Iceoryx2 shared-memory hop — which matches the transport benchmark's ~850 ns/P50 above, an independent confirmation of both numbers.
-- **tick-to-fill ≈ 1.75 µs**; the second ~900 ns is the strategy→execution hop plus the fill.
+- **The strategy decides in ~69 ns** at p50 — the whole composite signal, per tick. This is the number I stand behind: it is my code, on the hot path, and it does not change when the venue does.
+- **tick-to-order ≈ 880 ns**; subtract the ~69 ns of decision and the remainder (~810 ns) is one Iceoryx2 shared-memory hop — which matches the transport benchmark's ~850 ns/P50 above, an independent confirmation of both numbers.
+- **tick-to-fill ≈ 77 µs**, and this is where the matching engine shows up honestly. Under the old loopback fill this was ~1.75 µs (just the strategy→execution hop). Now the order round-trips to a real order book: it waits for the exchange's match loop to drain it, crosses the spread against resting liquidity, and a fill comes back. Most of the 77 µs is *not* transport — it is the order sitting until the exchange's next match/publish round. That is the true cost of going to a venue rather than filling in-process, and it is the right thing to see.
 
-So of the ~1.75 µs it takes a market tick to become a fill, the decision logic is ~67 ns and the rest is IPC and transport. That decomposition — *how much is my code versus the framework* — is the point of measuring it this way.
+In **passive** mode (`PASSIVE=1`, the strategy posts resting limit orders at the touch) tick-to-fill is different in kind, not just degree: it becomes **queue-wait** — the order rests and only fills once flow reaches its price and the queue ahead of it clears — so the p50 is hundreds of µs and the tail runs into milliseconds. That is what making a market actually looks like, and the same window measuring two very different things (taking vs. making) is the point.
+
+So the decomposition still holds where it matters: the *decision* is ~69 ns of my code, the *order hop* is ~810 ns of framework transport, and the *fill* is dominated by the venue — exactly the separation an execution engineer wants to reason about.
 
 **Not perturbing the measurement.** The per-sample cost on the hot path is a timestamp read, a subtract, one float multiply, and a push into a pre-allocated buffer; all sorting and printing happen on a reporter thread pinned to a separate core. The decision-only window is short enough (tens of ns) that the timestamp read itself is a material fraction, so it uses a serializing read (`rdtscp`/`lfence`, so the CPU can't reorder work out of the window) and subtracts a read overhead calibrated at startup. The larger windows are hundreds of ns to µs, where the ~6 ns read is noise, so they use a plain read and no correction. Cross-stage deltas subtract timestamps taken on different cores, which is valid here because this CPU's TSC is invariant and synchronized across cores.
 
