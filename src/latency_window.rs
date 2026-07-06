@@ -19,7 +19,12 @@ use std::time::{Duration, Instant};
 
 /// Samples to consume before recording begins — lets caches, branch predictors,
 /// and the IPC path warm so first-touch outliers don't pollute the distribution.
-const WARMUP_SAMPLES: u64 = 5_000;
+///
+/// Kept small on purpose: order-triggered windows (tick-to-order, tick-to-fill)
+/// see far fewer samples than per-tick windows, so a large warmup would keep them
+/// permanently in warmup and they'd never report. A couple hundred is enough to
+/// skip cold-start on the fast windows.
+const WARMUP_SAMPLES: u64 = 200;
 
 /// Emit a report once a window reaches this many samples...
 const FLUSH_SAMPLES: usize = 2_000;
