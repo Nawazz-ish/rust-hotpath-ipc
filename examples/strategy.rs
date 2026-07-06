@@ -20,7 +20,9 @@ use std::{
 };
 
 use rust_hotpath_ipc::hot_path::*;
+use rust_hotpath_ipc::latency_window::{calibrate_rdtsc_floor, LatencyReporter};
 use rust_hotpath_ipc::strategy::{Decision, Side, Strategy, StrategyConfig};
+use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cpu_id: usize = env::var("CPU_CORE")
@@ -101,12 +103,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3);
 
+    // Latency windows, aggregated off the hot path on a reporter thread pinned
+    // to REPORTER_CORE (a core no stage's hot loop owns). This stage owns two:
+    //   - decision-only: the Strategy::on_price() call in isolation (per tick)
+    //   - tick-to-order: origin tick timestamp -> order emitted
+    let reporter_core: usize = env::var("REPORTER_CORE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let reporter = LatencyReporter::new(reporter_core);
+    let mut win_decision = reporter.window("decision-only");
+    let mut win_tick_to_order = reporter.window("tick-to-order");
+    // Irreducible cost of the serialized read, subtracted from decision-only
+    // (whose interval is short enough that the read overhead is material).
+    let rdtsc_floor = calibrate_rdtsc_floor();
+
     println!("strategy: consuming MarketTick, emitting OrderCommand");
     println!("  in:  {}", MARKET_SERVICE);
     println!("  out: {}", ORDER_SERVICE);
     println!(
-        "  threshold: {:+.3}  max_position: +/-{}",
-        cfg.threshold, max_position
+        "  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
+        cfg.threshold, max_position, reporter_core, rdtsc_floor
     );
 
     let mut ticks_seen = 0u64;
@@ -126,6 +143,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tick: MarketTick = *sample;
         ticks_seen += 1;
 
+        // T0: the origin tick's timestamp — the clock starts here.
+        let t0 = tick.timestamp_ns;
+
         // Fixed-point (1e8) wire price -> f64 for the strategy math.
         let price = tick.price as f64 / 100_000_000.0;
 
@@ -139,7 +159,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        if let Decision::Trade { side, score } = strat.on_price(price) {
+        // decision-only window: time the pure signal-math call in isolation.
+        // Serialized reads (rdtscp) bracket the call so the CPU can't reorder
+        // work out of the window; subtract the calibrated read floor since the
+        // interval is short enough that the read overhead is material.
+        let d0 = rdtsc_serialized();
+        let decision = strat.on_price(price);
+        let d1 = rdtsc_serialized();
+        let dcyc = d1.saturating_sub(d0).saturating_sub(rdtsc_floor);
+        win_decision.push(fast_cycles_to_ns(dcyc));
+
+        if let Decision::Trade { side, score } = decision {
             // Pre-trade risk check: would this order breach the position limit?
             // A buy at +max (or a sell at -max) is suppressed; orders that
             // reduce or flip toward flat are always allowed.
@@ -155,11 +185,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             position = new_position;
 
             order_id += 1;
+            // T1: the moment the strategy commits to sending this order.
+            let t1 = rdtsc();
             let cmd = OrderCommand {
-                timestamp_ns: rdtsc(),
+                timestamp_ns: t1,
                 order_id,
                 price_ticks: tick.price, // marketable: submit at last price
                 quantity: 100_000_000,   // 1.0 unit
+                origin_ts: t0,           // carry T0 through for tick-to-fill downstream
                 symbol_id: tick.symbol_id,
                 user_id: 1,
                 side: match side {
@@ -171,12 +204,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 flags: 0,
                 exchange_id: tick.exchange_id,
                 priority: 0,
-                padding: [0; 20],
+                padding: [0; 12],
             };
             let out = orders.loan_uninit()?;
             let out = out.write_payload(cmd);
             out.send()?;
             orders_sent += 1;
+
+            // tick-to-order window: origin tick (T0) -> order emitted (T1).
+            win_tick_to_order.push(fast_cycles_to_ns(t1.saturating_sub(t0)));
 
             println!(
                 "order #{:>5}  {:<4}  px={:>10.2}  score={:+.3}  pos={:>+3}  (tick {})",

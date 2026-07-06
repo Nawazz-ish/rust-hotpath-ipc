@@ -14,19 +14,25 @@ use iceoryx2::prelude::*;
 #[repr(C, align(64))]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct OrderCommand {
-    pub timestamp_ns: u64, // 8  - RDTSC timestamp at creation
-    pub order_id: u64,     // 8
-    pub price_ticks: i64,  // 8  - price in minimum tick size (fixed point)
-    pub quantity: u64,     // 8  - fixed point
-    pub symbol_id: u32,    // 4  - pre-mapped symbol
-    pub user_id: u16,      // 2
-    pub side: u8,          // 1  - 0=buy, 1=sell
-    pub order_type: u8,    // 1  - 0=market, 1=limit
-    pub action: u8,        // 1  - 0=new, 1=cancel, 2=modify
-    pub flags: u8,         // 1
-    pub exchange_id: u8,   // 1  - pre-mapped exchange
-    pub priority: u8,      // 1  - execution priority
-    pub padding: [u8; 20], // 20 - pad to 64
+    pub timestamp_ns: u64, // 8  @0  - T1: RDTSC when the strategy emits this order
+    pub order_id: u64,     // 8  @8
+    pub price_ticks: i64,  // 8  @16 - price in minimum tick size (fixed point)
+    pub quantity: u64,     // 8  @24 - fixed point
+    // T0: the origin MarketTick's RDTSC timestamp, carried through so the
+    // execution stage can measure tick-to-fill latency end to end. Placed at
+    // offset 32 (8-aligned) so the struct stays exactly 64 bytes with no
+    // implicit padding — it lives in what used to be spare padding, so it
+    // costs nothing on the wire.
+    pub origin_ts: u64,    // 8  @32
+    pub symbol_id: u32,    // 4  @40 - pre-mapped symbol
+    pub user_id: u16,      // 2  @44
+    pub side: u8,          // 1  @46 - 0=buy, 1=sell
+    pub order_type: u8,    // 1  @47 - 0=market, 1=limit
+    pub action: u8,        // 1  @48 - 0=new, 1=cancel, 2=modify
+    pub flags: u8,         // 1  @49
+    pub exchange_id: u8,   // 1  @50 - pre-mapped exchange
+    pub priority: u8,      // 1  @51 - execution priority
+    pub padding: [u8; 12], // 12 @52 - pad to 64
 }
 
 /// Market-data tick — 64 bytes exactly.
@@ -119,6 +125,32 @@ pub fn rdtsc() -> u64 {
     }
 }
 
+/// A *serializing* timestamp read, for timing very short intervals (tens of ns).
+///
+/// Plain `rdtsc` is not ordered against surrounding instructions, so the CPU can
+/// hoist work into or out of the window you think you are timing. For the
+/// decision-only measurement — where the interval is small enough that a few
+/// reordered instructions matter — we fence first (`lfence` waits for prior
+/// instructions to retire) and then read. This trades a little more read
+/// overhead for a read that actually brackets the code between two calls; that
+/// overhead is measured and subtracted (see `latency_window::calibrate_rdtsc_floor`).
+///
+/// Only worth using for short windows: for the hundreds-of-ns tick-to-order and
+/// tick-to-fill windows, plain `rdtsc` is fine and cheaper.
+#[inline(always)]
+pub fn rdtsc_serialized() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        rdtsc()
+    }
+}
+
 /// Pre-mapped symbol IDs — integer keys instead of string symbols so the hot
 /// path never allocates or hashes.
 pub mod symbols {
@@ -147,5 +179,14 @@ mod tests {
         assert_eq!(std::mem::size_of::<MarketTick>(), 64);
         assert_eq!(std::mem::size_of::<ExecutionReport>(), 64);
         assert_eq!(std::mem::size_of::<OrderBookSnapshot>(), 64);
+    }
+
+    #[test]
+    fn origin_ts_is_eight_byte_aligned() {
+        // origin_ts is a u64 read/written on the hot path; a misaligned offset
+        // would force implicit padding (growing the struct past 64) or a slower
+        // unaligned access. Guard the offset explicitly.
+        assert_eq!(std::mem::offset_of!(OrderCommand, origin_ts) % 8, 0);
+        assert_eq!(std::mem::offset_of!(OrderCommand, origin_ts), 32);
     }
 }

@@ -79,6 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             order_id: seq,
             price_ticks: 5_000_000 + (seq % 1000) as i64,
             quantity: 100 + (seq % 50),
+            origin_ts: 0, // transport benchmark: no origin tick to carry
             symbol_id: symbols::BTC_USDT,
             user_id: 1,
             side: (seq % 2) as u8,
@@ -87,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flags: 0,
             exchange_id: exchanges::BINANCE,
             priority: 0,
-            padding: [0; 20],
+            padding: [0; 12],
         };
 
         // Hot path: loan a slot, write the payload, send. Time it in cycles.

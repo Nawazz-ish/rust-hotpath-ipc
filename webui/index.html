@@ -84,6 +84,25 @@
   #stats .stat .k { color: var(--muted); font-size: 10px; text-transform: uppercase; }
   #stats .stat .v { font-size: 16px; font-weight: 600; }
   .conn-hint { position: fixed; bottom: 8px; left: 210px; color: var(--muted); font-size: 11px; }
+
+  #latpanel { border-bottom: 1px solid var(--line); }
+  #lattbl { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  #lattbl th { color: var(--muted); font-size: 10px; text-transform: uppercase; text-align: right; font-weight: 500; padding: 2px 4px; }
+  #lattbl th:first-child { text-align: left; }
+  #lattbl td { padding: 3px 4px; font-size: 12px; text-align: right; }
+  #lattbl td.lw { text-align: left; color: var(--ink); }
+  #lattbl td.p50 { color: var(--accent); font-weight: 600; }
+  #lattbl td.p99, #lattbl td.p999 { color: var(--muted); }
+  #latbreak { margin-top: 10px; }
+  #latbreak .bkrow { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+  #bkbar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: #0a0e14; border: 1px solid var(--line); }
+  #bk_dec { background: var(--green); height: 100%; width: 0; transition: width .3s; }
+  #bk_ipc { background: #a371f7; height: 100%; width: 0; transition: width .3s; }
+  .bklegend { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--muted); }
+  .bklegend i.sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  .bklegend i.sw.dec { background: var(--green); }
+  .bklegend i.sw.ipc { background: #a371f7; }
+  .bklegend b { color: var(--ink); font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -134,6 +153,22 @@
       <div class="stat"><div class="k">Orders</div><div class="v" id="s_orders">0</div></div>
       <div class="stat"><div class="k">Position</div><div class="v" id="s_pos">0</div></div>
       <div class="stat"><div class="k">P&amp;L</div><div class="v" id="s_pnl">—</div></div>
+    </div>
+    <div id="latpanel" class="sec">
+      <h2>Execution latency (custom strategy)</h2>
+      <table id="lattbl">
+        <thead><tr><th></th><th>p50</th><th>p99</th><th>p99.9</th></tr></thead>
+        <tbody>
+          <tr data-w="decision-only"><td class="lw">decision only</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
+          <tr data-w="tick-to-order"><td class="lw">tick&#8594;order</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
+          <tr data-w="tick-to-fill"><td class="lw">tick&#8594;fill</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
+        </tbody>
+      </table>
+      <div id="latbreak">
+        <div class="bkrow"><span>where the time goes (p50)</span></div>
+        <div id="bkbar"><div id="bk_dec" title="your decision logic"></div><div id="bk_ipc" title="IPC + transport"></div></div>
+        <div class="bklegend"><span><i class="sw dec"></i>decision logic <b id="bk_dec_v">—</b></span><span><i class="sw ipc"></i>IPC / transport <b id="bk_ipc_v">—</b></span></div>
+      </div>
     </div>
     <div id="console"></div>
   </div>
@@ -347,6 +382,7 @@ function line(text) {
   while (cons.children.length > 400) cons.removeChild(cons.firstChild);
   updateStats(text);
 }
+const latState = {}; // window -> {min, p50, p99, p999}
 function updateStats(text) {
   let m;
   if ((m = text.match(/order #\s*(\d+).*pos=\s*([-+]?\d+)/))) {
@@ -358,6 +394,33 @@ function updateStats(text) {
     const el = document.getElementById("s_pnl");
     el.textContent = (v>=0?"+":"") + v.toFixed(0);
     el.style.color = v >= 0 ? "var(--green)" : "var(--red)";
+  }
+  // LAT <window> n=.. min=.. p50=.. p99=.. p999=.. ns   (the custom-strategy latency)
+  if ((m = text.match(/LAT\s+(decision-only|tick-to-order|tick-to-fill)\s+n=(\d+)\s+min=(\d+)\s+p50=(\d+)\s+p99=(\d+)\s+p999=(\d+)/))) {
+    latState[m[1]] = { min:+m[3], p50:+m[4], p99:+m[5], p999:+m[6] };
+    renderLatPanel();
+  }
+}
+
+function fmtNs(v) { return v == null ? "—" : (v >= 1000 ? (v/1000).toFixed(2)+" µs" : v+" ns"); }
+function renderLatPanel() {
+  document.querySelectorAll("#lattbl tbody tr").forEach(tr => {
+    const s = latState[tr.dataset.w];
+    tr.querySelector(".p50").textContent  = s ? fmtNs(s.p50)  : "—";
+    tr.querySelector(".p99").textContent  = s ? fmtNs(s.p99)  : "—";
+    tr.querySelector(".p999").textContent = s ? fmtNs(s.p999) : "—";
+  });
+  // Breakdown (p50): decision logic vs everything else (IPC + transport).
+  const dec = latState["decision-only"]?.p50;
+  const ttf = latState["tick-to-fill"]?.p50;
+  if (dec != null && ttf != null && ttf > 0) {
+    const decPart = Math.min(dec, ttf);
+    const ipcPart = Math.max(0, ttf - decPart);
+    const total = decPart + ipcPart || 1;
+    document.getElementById("bk_dec").style.width = (100*decPart/total) + "%";
+    document.getElementById("bk_ipc").style.width = (100*ipcPart/total) + "%";
+    document.getElementById("bk_dec_v").textContent = fmtNs(decPart);
+    document.getElementById("bk_ipc_v").textContent = fmtNs(ipcPart);
   }
 }
 let es = null;

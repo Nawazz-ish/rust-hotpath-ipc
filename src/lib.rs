@@ -34,6 +34,7 @@
 pub mod hot_path;
 pub mod hot_path_service;
 pub mod latency;
+pub mod latency_window;
 pub mod pod_types;
 pub mod rdtsc;
 pub mod service_names;

@@ -17,6 +17,8 @@ use std::{
 };
 
 use rust_hotpath_ipc::hot_path::*;
+use rust_hotpath_ipc::latency_window::LatencyReporter;
+use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cpu_id: usize = env::var("CPU_CORE")
@@ -57,9 +59,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_or_create()?;
     let reports = exec_svc.publisher_builder().create()?;
 
+    // tick-to-fill latency window, aggregated off the hot path on a reporter
+    // thread pinned to REPORTER_CORE. Execution has T0 (carried in the order's
+    // origin_ts) and T2 (rdtsc at fill), so it measures the full custom pipeline.
+    let reporter_core: usize = env::var("REPORTER_CORE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let reporter = LatencyReporter::new(reporter_core);
+    let mut win_tick_to_fill = reporter.window("tick-to-fill");
+
     println!("execution: filling OrderCommand, publishing ExecutionReport");
     println!("  in:  {}", ORDER_SERVICE);
     println!("  out: {}", EXECUTION_SERVICE);
+    println!("  reporter_core: {}", reporter_core);
 
     // Position accounting in f64 (derived from fixed-point 1e8 wire prices).
     let mut position = 0.0_f64; // net units held (+long / -short)
@@ -79,6 +92,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let cmd: OrderCommand = *sample;
 
+        // T0: the origin tick timestamp, carried through the pipeline.
+        let t0 = cmd.origin_ts;
+
         let price = cmd.price_ticks as f64 / 100_000_000.0;
         let qty = cmd.quantity as f64 / 100_000_000.0;
         last_price = price;
@@ -94,9 +110,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         fills += 1;
 
+        // T2: the fill instant. Reuse it for both the report stamp and the
+        // tick-to-fill measurement (one rdtsc read, not two).
+        let t2 = rdtsc();
+
         // Publish an execution report (immediate full fill).
         let report = ExecutionReport {
-            timestamp_ns: rdtsc(),
+            timestamp_ns: t2,
             order_id: cmd.order_id,
             exchange_order_id: cmd.order_id,
             executed_price: cmd.price_ticks,
@@ -110,6 +130,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let out = reports.loan_uninit()?;
         let out = out.write_payload(report);
         out.send()?;
+
+        // tick-to-fill window: origin tick (T0) -> fill (T2) = the full custom
+        // pipeline. Guard against a zero/garbage origin_ts (e.g. a warm-up order
+        // from before the field was populated) so it doesn't skew the min.
+        if t0 != 0 && t2 > t0 {
+            win_tick_to_fill.push(fast_cycles_to_ns(t2.saturating_sub(t0)));
+        }
 
         // Mark-to-market equity: realized cash + value of the open position.
         let equity = cash + position * price;

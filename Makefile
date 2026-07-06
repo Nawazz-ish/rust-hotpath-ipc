@@ -2,10 +2,10 @@
 # Note: the demo needs Linux (Iceoryx2 shared memory). Real-time scheduling and
 # reliable CPU pinning need root / CAP_SYS_NICE.
 
-.PHONY: build test demo bench docker-build docker-run clean fmt clippy
+.PHONY: build test demo pipeline studio bench docker-build docker-run clean fmt clippy
 
 build:
-	cargo build --release --examples
+	cargo build --release --examples --bin control-server
 
 test:
 	cargo test
@@ -28,9 +28,36 @@ demo: build
 	CPU_CORE=$(PUB_CORE) ./target/release/examples/publisher; \
 	kill $$SUB_PID 2>/dev/null || true
 
+# Full three-stage custom-strategy pipeline with end-to-end latency windows.
+# feed -> strategy -> execution, pinned to cores 1/2/3; latency reporters on
+# core 0 (a core no hot loop owns). Each stage prints its `LAT` percentile lines:
+# strategy owns decision-only + tick-to-order, execution owns tick-to-fill.
+# SCHED_FIFO on the stages needs privilege — run `sudo make pipeline`.
+FEED_CORE ?= 1
+STRAT_CORE ?= 2
+EXEC_CORE ?= 3
+TICK_US ?= 40
+THRESHOLD ?= 0.25
+MAX_POSITION ?= 3
+pipeline: build
+	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
+	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), feed (core $(FEED_CORE)); reporters on core $(REPORTER_CORE)"
+	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/examples/execution & E=$$!; \
+	sleep 1; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) ./target/release/examples/strategy & S=$$!; \
+	sleep 1; \
+	CPU_CORE=$(FEED_CORE) TICK_US=$(TICK_US) ./target/release/examples/feed; \
+	kill $$S $$E 2>/dev/null || true
+
+# Visual strategy builder: control server + web UI on :8080, driving the real
+# pipeline with a live latency panel. `sudo make studio` for RT scheduling.
+studio: build
+	@echo "open http://localhost:8080  (or tunnel: ssh -L 8080:localhost:8080 ...)"
+	./target/release/control-server
+
 bench:
 	cargo build --release --examples
-	@echo "run 'make demo' and read the subscriber's latency percentile table"
+	@echo "run 'make demo' (transport benchmark) or 'sudo make pipeline' (custom-strategy latency)"
 
 docker-build:
 	docker build -t rust-hotpath-ipc .
