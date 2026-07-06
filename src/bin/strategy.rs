@@ -129,6 +129,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // want to see multi-level execution rather than clean single fills.
     let order_units: f64 = env_or("ORDER_UNITS", 1.0);
     let order_qty: u64 = (order_units * 100_000_000.0) as u64;
+    // Position moves by the order's size, not by one. Round up so a fractional
+    // size still counts toward the limit (conservative — never under-counts
+    // exposure). This is what keeps the strategy's position book in the same
+    // units the execution stage accounts, so the limit means what it says.
+    let position_delta: i64 = (order_units.ceil() as i64).max(1);
 
     // Latency windows, aggregated off the hot path on a reporter thread pinned
     // to REPORTER_CORE (a core no stage's hot loop owns). This stage owns two:
@@ -271,11 +276,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Some((side, score)) = trade {
             // Pre-trade risk check: would this order breach the position limit?
-            // A buy at +max (or a sell at -max) is suppressed; orders that
-            // reduce or flip toward flat are always allowed.
+            // The order moves the book by its full size (position_delta units), not
+            // by one, so the limit is enforced in the same units execution accounts.
+            // A buy that would push past +max (or a sell past -max) is suppressed.
             let delta: i64 = match side {
-                Side::Buy => 1,
-                Side::Sell => -1,
+                Side::Buy => position_delta,
+                Side::Sell => -position_delta,
             };
             let new_position = position + delta;
             if new_position > max_position || new_position < -max_position {

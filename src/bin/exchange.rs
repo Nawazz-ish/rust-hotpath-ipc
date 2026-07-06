@@ -99,7 +99,6 @@ struct Fill {
     price_ticks: i64,
     quantity: u64,
     taker_origin_ts: u64,
-    taker_side: Side,
     taker_remaining_after: u64, // 0 => this was the terminal fill for the taker
     taker_is_synthetic: bool,
     maker_is_synthetic: bool,
@@ -224,7 +223,6 @@ impl Book {
                     price_ticks: best_px,
                     quantity: fill_qty,
                     taker_origin_ts: origin_ts,
-                    taker_side: side,
                     taker_remaining_after: remaining,
                     taker_is_synthetic: is_synthetic,
                     maker_is_synthetic: maker_syn,
