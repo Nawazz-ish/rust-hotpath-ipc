@@ -108,6 +108,32 @@ So of the ~1.75 µs it takes a market tick to become a fill, the decision logic 
 
 The visual builder (`make studio`, then open `:8080`) shows these three windows and the decision-vs-transport breakdown live while a strategy you draw runs.
 
+## Graph-defined strategies compiled to bytecode
+
+The strategy above is hand-written Rust. The visual builder lets you *draw* a strategy from nodes (indicators, conditions, logic gates, buy/sell signals), and that graph is not just tuning parameters — it is **compiled to a flat bytecode program and interpreted per tick**. Change the wiring and the emitted program changes, so the drawn graph genuinely drives execution.
+
+The compiler (`src/compiler.rs`) topologically lowers the node graph, emitting operands before the operators that consume them; the VM (`src/bytecode.rs`) is a stack machine over `f64` with the terminal `BUY`/`SELL` opcodes popping a truthy condition. Indicators are stateful ops — each carries an index into a state vector that persists across ticks — so they work on a live tick stream rather than a precomputed series. A drawn graph disassembles like this (opcodes are in the same space as the parent platform's VM — `BUY = 0x30`, `GT = 0x50`):
+
+```
+  0  0x61  MOMENTUM  lookback=16 slot=0
+  1  0x40  PUSH_CONST 0.15
+  2  0x50  GT
+  3  0x30  BUY
+  4  0x62  REVERSION window=64 slot=1
+  5  0x40  PUSH_CONST -0.15
+  6  0x51  LT
+  7  0x31  SELL
+```
+
+The obvious question is whether interpreting bytecode per tick is too slow for a hot path. Measured on the same c7i, the interpreter's per-tick cost (`vm-decision`) sits right next to the hand-written strategy's:
+
+```
+LAT vm-decision   n=2000  min=61  p50=74  p99=112  p999=138  ns   (bytecode interpreter, 8 ops)
+LAT decision-only n=2000  min=61  p50=67  p99=161  p999=215  ns   (hand-written Rust)
+```
+
+**~74 ns to interpret the compiled strategy versus ~67 ns for native code** — within a few nanoseconds at the median, and *tighter* at the tail. A straight-line program over a fixed stack with pre-allocated indicator state and no per-tick allocation costs almost nothing to interpret, so the flexibility of graph-defined strategies is essentially free on this path. The interpreter dispatches on a typed opcode enum for speed; `to_bytes()` produces the equivalent flat byte program for wire transport or inspection.
+
 ## What I'd do next
 
 This is a focused slice, and there are clear next steps I deliberately left out to keep it honest and small:
