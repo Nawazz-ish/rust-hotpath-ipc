@@ -134,6 +134,18 @@ LAT decision-only n=2000  min=61  p50=67  p99=161  p999=215  ns   (hand-written 
 
 **~74 ns to interpret the compiled strategy versus ~67 ns for native code** — within a few nanoseconds at the median, and *tighter* at the tail. A straight-line program over a fixed stack with pre-allocated indicator state and no per-tick allocation costs almost nothing to interpret, so the flexibility of graph-defined strategies is essentially free on this path. The interpreter dispatches on a typed opcode enum for speed; `to_bytes()` produces the equivalent flat byte program for wire transport or inspection.
 
+The obvious follow-up — is the interpreter really doing the work, or is the optimizer eliding it? — is answered by the cost scaling with program size (same c7i, `vm-decision` p50):
+
+| program | ops | p50 |
+|---|---:|---:|
+| momentum → condition → buy | 4 | 43 ns |
+| momentum → buy, reversion → sell | 8 | 74 ns |
+| (momentum AND reversion) → buy, reversion → sell | 10 | 95 ns |
+
+Latency grows roughly linearly at ~5–6 ns per op (~15–18 cycles), exactly what a match-dispatch plus a couple of arithmetic ops per instruction should cost. If the VM were being optimized away the three would be indistinguishable; instead the cost tracks the work, which is the evidence that the interpreter is genuinely executing the compiled graph.
+
+A note on faithful compilation: the compiler rejects ambiguous graphs (e.g. two indicators wired straight into one condition) with a clear error rather than silently dropping an input, so the disassembly always matches the graph you drew. Use `cargo run --example disasm -- graph.json` to see the compiled bytecode for any graph.
+
 ## What I'd do next
 
 This is a focused slice, and there are clear next steps I deliberately left out to keep it honest and small:
