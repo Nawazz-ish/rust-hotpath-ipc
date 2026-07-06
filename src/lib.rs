@@ -17,6 +17,8 @@
 //!   bytecode program and interpret it on a stack VM, once per tick.
 //! - [`tsc_calibration`] — cycle <-> nanosecond calibration and TSC <-> Unix-time
 //!   correlation across processes.
+//! - [`order_book`] — the pure limit order book + matcher (price-time priority,
+//!   partial fills, queue position, cancels); no IPC, unit-tested standalone.
 //! - [`latency_window`] — the off-hot-path latency recorder: a lock-free push on
 //!   the hot side, percentile aggregation on a reporter thread pinned off-core.
 //! - [`runtime`] — shared process setup: reading tunables from the environment
@@ -34,6 +36,7 @@ pub mod bytecode;
 pub mod compiler;
 pub mod hot_path;
 pub mod latency_window;
+pub mod order_book;
 pub mod runtime;
 pub mod strategy;
 pub mod tsc_calibration;

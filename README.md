@@ -25,6 +25,7 @@ The library (`src/`) is transport-agnostic logic; the runnable processes (`src/b
 ```
 src/
   hot_path.rs        the 64-byte POD message contract + rdtsc()  (the wire types iceoryx2 carries)
+  order_book.rs      the limit order book + matcher (price-time priority, partial fills, cancels)
   strategy.rs        composite trend / momentum / mean-reversion strategy
   compiler.rs        a drawn strategy graph  ->  a flat bytecode program
   bytecode.rs        a stack VM that interprets that program, once per tick
