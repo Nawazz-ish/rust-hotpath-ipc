@@ -140,6 +140,18 @@ fn run_pipeline(mut request: tiny_http::Request, hub: Arc<Mutex<Hub>>) {
         format!("[control] launching pipeline: {}", params.describe()),
     );
 
+    // Persist the drawn graph so the strategy stage can compile it to bytecode
+    // and run THAT (rather than only the parametric fallback). Written to a fixed
+    // temp path the strategy reads via STRATEGY_JSON.
+    let graph_path = std::env::temp_dir().join("rust_hotpath_strategy.json");
+    let has_graph = std::fs::write(&graph_path, &body).is_ok() && body.contains("\"nodes\"");
+    if has_graph {
+        log_line(
+            &hub,
+            format!("[control] strategy graph -> {}", graph_path.display()),
+        );
+    }
+
     // Stop any prior run first.
     {
         let mut h = hub.lock().unwrap();
@@ -148,7 +160,13 @@ fn run_pipeline(mut request: tiny_http::Request, hub: Arc<Mutex<Hub>>) {
         }
     }
 
-    match launch(&params, hub.clone()) {
+    let graph_arg = if has_graph {
+        Some(graph_path.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
+    match launch(&params, graph_arg.as_deref(), hub.clone()) {
         Ok(pipeline) => {
             hub.lock().unwrap().running = Some(pipeline);
             respond_json(request, r#"{"ok":true}"#);
@@ -255,7 +273,11 @@ impl StrategyParams {
 }
 
 /// Launch feed + strategy + execution, each with stdout piped into the hub.
-fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, String> {
+fn launch(
+    p: &StrategyParams,
+    graph_json_path: Option<&str>,
+    hub: Arc<Mutex<Hub>>,
+) -> Result<RunningPipeline, String> {
     // Clean any stale iceoryx2 state so a fresh run starts clean.
     let _ = std::process::Command::new("sh")
         .arg("-c")
@@ -281,19 +303,19 @@ fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, S
     let execution = spawn_stage(&exe("execution"), &[("CPU_CORE", "3".into())], "exec", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
 
-    let strategy = spawn_stage(
-        &exe("strategy"),
-        &[
-            ("CPU_CORE", "2".into()),
-            ("THRESHOLD", format!("{}", p.threshold)),
-            ("WEIGHT_TREND", format!("{}", p.weight_trend)),
-            ("WEIGHT_MOMENTUM", format!("{}", p.weight_momentum)),
-            ("WEIGHT_REVERSION", format!("{}", p.weight_reversion)),
-            ("MAX_POSITION", format!("{}", p.max_position)),
-        ],
-        "strat",
-        &hub,
-    )?;
+    let mut strat_env: Vec<(&str, String)> = vec![
+        ("CPU_CORE", "2".into()),
+        ("THRESHOLD", format!("{}", p.threshold)),
+        ("WEIGHT_TREND", format!("{}", p.weight_trend)),
+        ("WEIGHT_MOMENTUM", format!("{}", p.weight_momentum)),
+        ("WEIGHT_REVERSION", format!("{}", p.weight_reversion)),
+        ("MAX_POSITION", format!("{}", p.max_position)),
+    ];
+    // Hand the drawn graph to the strategy so it compiles + runs the bytecode.
+    if let Some(path) = graph_json_path {
+        strat_env.push(("STRATEGY_JSON", path.to_string()));
+    }
+    let strategy = spawn_stage(&exe("strategy"), &strat_env, "strat", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
 
     let feed = spawn_stage(

@@ -19,6 +19,8 @@ use std::{
     sync::Arc,
 };
 
+use rust_hotpath_ipc::bytecode::{self, Vm};
+use rust_hotpath_ipc::compiler;
 use rust_hotpath_ipc::hot_path::*;
 use rust_hotpath_ipc::latency_window::{calibrate_rdtsc_floor, LatencyReporter};
 use rust_hotpath_ipc::strategy::{Decision, Side, Strategy, StrategyConfig};
@@ -114,13 +116,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reporter = LatencyReporter::new(reporter_core);
     let mut win_decision = reporter.window("decision-only");
     let mut win_tick_to_order = reporter.window("tick-to-order");
+    // Timed window for the bytecode VM path, when a graph-defined strategy is
+    // loaded (directly comparable to decision-only, the hand-written strategy).
+    let mut win_vm = reporter.window("vm-decision");
     // Irreducible cost of the serialized read, subtracted from decision-only
     // (whose interval is short enough that the read overhead is material).
     let rdtsc_floor = calibrate_rdtsc_floor();
 
+    // If STRATEGY_JSON points at a graph the visual builder produced, compile it
+    // to bytecode and run THAT per tick — the drawn graph actually drives
+    // execution. Otherwise fall back to the hand-written composite strategy.
+    let mut vm: Option<Vm> = env::var("STRATEGY_JSON")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .and_then(|s| compiler::parse(&s).ok())
+        .and_then(|g| compiler::compile(&g).ok())
+        .map(Vm::new)
+        .filter(|vm| !vm.is_empty());
+
     println!("strategy: consuming MarketTick, emitting OrderCommand");
     println!("  in:  {}", MARKET_SERVICE);
     println!("  out: {}", ORDER_SERVICE);
+    match &vm {
+        Some(v) => {
+            println!("  mode: bytecode VM ({} ops)", v.program().len());
+            print!("{}", v.disassemble());
+        }
+        None => println!("  mode: fixed composite strategy"),
+    }
     println!(
         "  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
         cfg.threshold, max_position, reporter_core, rdtsc_floor
@@ -159,17 +182,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        // decision-only window: time the pure signal-math call in isolation.
-        // Serialized reads (rdtscp) bracket the call so the CPU can't reorder
-        // work out of the window; subtract the calibrated read floor since the
-        // interval is short enough that the read overhead is material.
-        let d0 = rdtsc_serialized();
-        let decision = strat.on_price(price);
-        let d1 = rdtsc_serialized();
-        let dcyc = d1.saturating_sub(d0).saturating_sub(rdtsc_floor);
-        win_decision.push(fast_cycles_to_ns(dcyc));
+        // Decision, timed in isolation. Serialized reads (rdtscp) bracket the
+        // call so the CPU can't reorder work out of the window; subtract the
+        // calibrated read floor since the interval is short enough that the read
+        // overhead is material. The bytecode-VM path and the fixed-strategy path
+        // feed distinct windows (vm-decision vs decision-only) so their per-tick
+        // cost is directly comparable.
+        let trade: Option<(Side, f64)> = match &mut vm {
+            Some(vm) => {
+                let d0 = rdtsc_serialized();
+                let d = vm.run(price);
+                let d1 = rdtsc_serialized();
+                win_vm.push(fast_cycles_to_ns(
+                    d1.saturating_sub(d0).saturating_sub(rdtsc_floor),
+                ));
+                bytecode::to_side(d)
+            }
+            None => {
+                let d0 = rdtsc_serialized();
+                let decision = strat.on_price(price);
+                let d1 = rdtsc_serialized();
+                win_decision.push(fast_cycles_to_ns(
+                    d1.saturating_sub(d0).saturating_sub(rdtsc_floor),
+                ));
+                match decision {
+                    Decision::Trade { side, score } => Some((side, score)),
+                    Decision::Hold => None,
+                }
+            }
+        };
 
-        if let Decision::Trade { side, score } = decision {
+        if let Some((side, score)) = trade {
             // Pre-trade risk check: would this order breach the position limit?
             // A buy at +max (or a sell at -max) is suppressed; orders that
             // reduce or flip toward flat are always allowed.

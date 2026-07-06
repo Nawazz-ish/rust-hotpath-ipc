@@ -159,7 +159,8 @@
       <table id="lattbl">
         <thead><tr><th></th><th>p50</th><th>p99</th><th>p99.9</th></tr></thead>
         <tbody>
-          <tr data-w="decision-only"><td class="lw">decision only</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
+          <tr data-w="decision-only"><td class="lw">decision (fixed)</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
+          <tr data-w="vm-decision"><td class="lw">decision (bytecode)</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
           <tr data-w="tick-to-order"><td class="lw">tick&#8594;order</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
           <tr data-w="tick-to-fill"><td class="lw">tick&#8594;fill</td><td class="p50">—</td><td class="p99">—</td><td class="p999">—</td></tr>
         </tbody>
@@ -396,7 +397,7 @@ function updateStats(text) {
     el.style.color = v >= 0 ? "var(--green)" : "var(--red)";
   }
   // LAT <window> n=.. min=.. p50=.. p99=.. p999=.. ns   (the custom-strategy latency)
-  if ((m = text.match(/LAT\s+(decision-only|tick-to-order|tick-to-fill)\s+n=(\d+)\s+min=(\d+)\s+p50=(\d+)\s+p99=(\d+)\s+p999=(\d+)/))) {
+  if ((m = text.match(/LAT\s+(decision-only|vm-decision|tick-to-order|tick-to-fill)\s+n=(\d+)\s+min=(\d+)\s+p50=(\d+)\s+p99=(\d+)\s+p999=(\d+)/))) {
     latState[m[1]] = { min:+m[3], p50:+m[4], p99:+m[5], p999:+m[6] };
     renderLatPanel();
   }
@@ -411,7 +412,9 @@ function renderLatPanel() {
     tr.querySelector(".p999").textContent = s ? fmtNs(s.p999) : "—";
   });
   // Breakdown (p50): decision logic vs everything else (IPC + transport).
-  const dec = latState["decision-only"]?.p50;
+  // Use whichever decision window is active — the bytecode VM if a graph is
+  // loaded, else the fixed strategy.
+  const dec = latState["vm-decision"]?.p50 ?? latState["decision-only"]?.p50;
   const ttf = latState["tick-to-fill"]?.p50;
   if (dec != null && ttf != null && ttf > 0) {
     const decPart = Math.min(dec, ttf);

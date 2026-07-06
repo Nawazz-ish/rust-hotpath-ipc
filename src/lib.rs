@@ -31,6 +31,8 @@
 //! real-time scheduling, and the hot/cold separation that keeps the hot path
 //! free of any database or audit dependency.
 
+pub mod bytecode;
+pub mod compiler;
 pub mod hot_path;
 pub mod hot_path_service;
 pub mod latency;
