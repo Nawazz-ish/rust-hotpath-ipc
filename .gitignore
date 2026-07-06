@@ -15,3 +15,6 @@ flamegraph.svg
 .vscode/
 *.swp
 .claude/
+
+# Private interview prep / strategy notes — never in the public repo
+docs/plans/
