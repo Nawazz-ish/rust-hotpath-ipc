@@ -113,6 +113,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // strong the signal is. Real systems layer notional and loss limits here too.
     let max_position: i64 = env_or("MAX_POSITION", 3);
 
+    // Order size in whole units. The default 1.0 fills whole against a single
+    // maker; sizing up past a typical resting level makes the order sweep several
+    // price levels, so the exchange returns partial fills — worth setting when you
+    // want to see multi-level execution rather than clean single fills.
+    let order_units: f64 = env_or("ORDER_UNITS", 1.0);
+    let order_qty: u64 = (order_units * 100_000_000.0) as u64;
+
     // Latency windows, aggregated off the hot path on a reporter thread pinned
     // to REPORTER_CORE (a core no stage's hot loop owns). This stage owns two:
     //   - decision-only: the Strategy::on_price() call in isolation (per tick)
@@ -172,9 +179,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => println!("  mode: fixed composite strategy"),
     }
     println!(
-        "  wait_mode: {}  order_style: {}  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
+        "  wait_mode: {}  order_style: {}  order_units: {}  threshold: {:+.3}  max_position: +/-{}  reporter_core: {}  rdtsc_floor: {} cyc",
         if use_waitset { "waitset (blocking)" } else { "poll (busy-spin)" },
         if passive { "passive (rest at touch)" } else { "marketable" },
+        order_units,
         cfg.threshold,
         max_position,
         reporter_core,
@@ -285,8 +293,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 timestamp_ns: t1,
                 order_id,
                 price_ticks: order_price,
-                quantity: 100_000_000, // 1.0 unit
-                origin_ts: t0,         // carry T0 through for tick-to-fill downstream
+                quantity: order_qty,
+                origin_ts: t0, // carry T0 through for tick-to-fill downstream
                 symbol_id: tick.symbol_id,
                 user_id: 1,
                 side: match side {

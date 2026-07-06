@@ -43,12 +43,13 @@ TICK_US ?= 40
 THRESHOLD ?= 0.25
 MAX_POSITION ?= 3
 PASSIVE ?= 0
+ORDER_UNITS ?= 1
 pipeline: build
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), exchange (core $(EXCH_CORE)); reporters on core $(REPORTER_CORE)"
 	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
 	sleep 1; \
-	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) PASSIVE=$(PASSIVE) ./target/release/strategy & S=$$!; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) PASSIVE=$(PASSIVE) ORDER_UNITS=$(ORDER_UNITS) ./target/release/strategy & S=$$!; \
 	sleep 1; \
 	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
 	kill $$S $$E 2>/dev/null || true
