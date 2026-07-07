@@ -113,6 +113,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(w) = envf("WEIGHT_REVERSION") {
         cfg.weight_reversion = w;
     }
+    // Minimum ticks between two same-side orders. Lower it for a denser demo
+    // (more orders on screen), raise it to throttle. Default 32 keeps the strategy
+    // from firing the same direction every tick.
+    if let Some(c) = env::var("COOLDOWN")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        cfg.cooldown_ticks = c;
+    }
     if let Some(p) = envu("FAST_EMA") {
         cfg.fast_ema_period = p;
     }

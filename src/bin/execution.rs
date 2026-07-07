@@ -152,13 +152,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             order_ctx.remove(&report.order_id);
         }
 
-        // Mark-to-market equity: realized cash + value of the open position.
-        let equity = cash + position * price;
+        // Mark-to-market P&L: realized cash flow + value of the open position.
+        // (Starts from zero cash, so equity and P&L are the same number here.)
+        let pnl = cash + position * price;
         let side_s = if side == 0 { "BUY " } else { "SELL" };
         let partial = if report.status == 1 { " (partial)" } else { "" };
         println!(
-            "fill #{:>5}  {}  px={:>10.2}  qty={:>6.2}  pos={:>+7.2}  equity={:>+11.2}{}",
-            report.order_id, side_s, price, qty, position, equity, partial
+            "fill #{:>5}  {}  px={:>10.2}  qty={:>6.2}  pos={:>+7.2}  pnl={:>+11.2}{}",
+            report.order_id, side_s, price, qty, position, pnl, partial
         );
     }
 

@@ -390,7 +390,7 @@ function updateStats(text) {
     document.getElementById("s_orders").textContent = m[1];
     document.getElementById("s_pos").textContent = m[2];
   }
-  if ((m = text.match(/equity=\s*([-+]?\d+\.?\d*)/))) {
+  if ((m = text.match(/pnl=\s*([-+]?\d+\.?\d*)/))) {
     const v = parseFloat(m[1]);
     const el = document.getElementById("s_pnl");
     el.textContent = (v>=0?"+":"") + v.toFixed(0);

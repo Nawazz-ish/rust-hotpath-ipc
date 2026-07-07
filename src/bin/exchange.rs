@@ -255,6 +255,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open_or_create()?;
     let order_listener = order_event.listener_builder().create()?;
 
+    // Whether to notify the market event after each tick. Only useful when a
+    // consumer runs the strategy in WAIT_MODE=waitset; in the default poll mode
+    // nobody listens, so notifying is wasted work (and iceoryx2 logs a
+    // deliver-failed warning every time). Off by default; set MARKET_NOTIFY=1
+    // when demoing the strategy's waitset path.
+    let market_notify = env_or("MARKET_NOTIFY", 0u8) == 1;
+
     // Output: market ticks (top of book) + the event notify for WaitSet consumers.
     let market_svc = node
         .service_builder(&MARKET_SERVICE.try_into()?)
@@ -405,7 +412,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let s = ticks.loan_uninit()?;
             s.write_payload(tick).send()?;
-            let _ = notifier.notify();
+            if market_notify {
+                let _ = notifier.notify();
+            }
 
             let snap = OrderBookSnapshot {
                 timestamp_ns: tick.timestamp_ns,
