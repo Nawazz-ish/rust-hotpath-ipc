@@ -1,6 +1,19 @@
 # rust-hotpath-ipc
 
-An extracted hot-path IPC subsystem from a proprietary crypto trading platform. It moves order commands, market ticks, and execution reports between separate OS processes over zero-copy shared memory, on the critical path of a live trading engine, in sub-microsecond time. This repository is an anonymized slice of the production system: the message layout, the latency-measurement pipeline, and the real-time scheduling logic are intact; everything that touches persistence, accounting, or venue credentials has been deliberately left out (see Architecture). It is provided as a standalone, self-contained Rust crate.
+An extracted hot-path IPC subsystem from a proprietary crypto trading platform. It runs a full tick-to-trade loop across separate OS processes — a **matching engine** with a real limit order book, a **strategy** that reads ticks and emits orders, and an **execution** stage that books fills and P&L — all wired over **zero-copy shared-memory IPC** and instrumented with **RDTSC nanosecond latency measurement**. This repository is an anonymized slice of the production system: the message layout, the matching engine, the latency-measurement pipeline, and the real-time scheduling are intact; everything that touches persistence, accounting, or venue credentials has been deliberately left out (see [Architecture](#architecture)). It is a standalone, self-contained Rust crate.
+
+## Quick start
+
+Linux, a recent stable Rust toolchain, and a C/C++ toolchain (`clang`/`gcc`, `cmake`, `make` — iceoryx2 builds a native component). Real-time scheduling and CPU pinning need privilege, so the run targets use `sudo`.
+
+```sh
+cargo test              # unit tests — the matcher's guarantees are proven here
+sudo make demo-execution  # watch orders sweep the book and PARTIALLY FILL, with live P&L
+sudo make demo-latency    # the three tick-to-trade latency windows (decision / order / fill)
+sudo make studio          # visual strategy builder + live pipeline on http://localhost:8080
+```
+
+The three `make demo-*` targets run the same `exchange → strategy → execution` pipeline, pinned to cores 1/2/3 with latency reporters on core 0; let each run ~15 seconds then `Ctrl-C`. Tunables are env vars (`TICK_US`, `THRESHOLD`, `MAX_POSITION`, `ORDER_UNITS`, `PASSIVE=1`, `WAIT_MODE=waitset`) — e.g. `sudo make demo-execution ORDER_UNITS=5`. `make demo` runs the raw transport microbenchmark on its own. Viewing `studio` from a laptop when the server is remote: forward the port with `ssh -L 8080:localhost:8080 …`, then open `localhost:8080`.
 
 ## Architecture
 
@@ -15,8 +28,8 @@ The moving parts:
 - **64-byte, cache-line-aligned POD messages.** `OrderCommand`, `MarketTick`, `ExecutionReport`, and `OrderBookSnapshot` are each exactly one cache line, `#[repr(C, align(64))]`, plain-old-data with no pointers or owned heap. They are copied bit-for-bit with no serialization step.
 - **Zero-copy IPC over shared memory.** Messages are published into and received from a lock-free shared-memory ring buffer. The payload is written once, in place, and read in place by the subscriber. Nothing is serialized, framed, or copied through a kernel socket buffer on the way across.
 - **RDTSC latency measurement with percentile aggregation.** Each message is timestamped with the CPU timestamp counter at send and at receive. On the receive thread the only work per message is one timestamp read and a push into a pre-allocated buffer; when a window fills, the buffer is handed to a separate reporter thread over a channel, and that thread does the sorting and printing. So the sort and the I/O never run on the pinned, real-time receive loop. Cycles are converted to nanoseconds using the crate's runtime-calibrated TSC frequency, not a hardcoded clock assumption. Results are reported as percentiles (min/p50/p99/p99.9/max), not an average, because the tail is what a trading path cares about.
-- **CPU core pinning and real-time scheduling.** Publisher and subscriber threads pin themselves to specific cores and, on Linux, raise themselves to `SCHED_FIFO` real-time priority, so the OS scheduler does not migrate them or preempt them mid-cycle.
-- **A real matching engine, not a loopback fill.** The `exchange` stage keeps a limit order book — two price-sorted sides with a FIFO queue at each price, so matching honours **price-time priority**. The strategy's orders cross the spread and fill against resting liquidity (walking several levels for size, i.e. partial fills), or, as passive limit orders, rest and fill only once the queue ahead of them clears (so **queue position** is real). Because a venue's price is whatever its book says, the exchange is also the market-data source: seeded synthetic participants post and cancel around a drifting fair value, and the top of that book becomes the `MarketTick` stream the strategy trades on. It also publishes an `OrderBookSnapshot` (best bid/ask + sizes) on a separate service for any cold-path consumer or UI that wants depth without subscribing to the tick stream — the strategy itself only needs the ticks. The ticks the strategy sees and the fills it gets come from the *same* book, and `tick-to-fill` measures a genuine round-trip through the matcher rather than a loopback.
+- **CPU core pinning and real-time scheduling.** Hot threads pin themselves to specific cores and, on Linux, raise themselves to `SCHED_FIFO` real-time priority, so the OS scheduler does not migrate them or preempt them mid-cycle.
+- **A real matching engine, not a loopback fill.** Orders match against a limit order book with price-time priority, partial fills, and queue position — see [The matching engine](#the-matching-engine).
 
 ## Repository layout
 
@@ -72,45 +85,32 @@ Each of these is a trade-off, so here is the reasoning, not just the choice.
 
 **Core pinning and `SCHED_FIFO` — to make latency predictable, not just low.** A trading hot path cares about the tail more than the mean. The enemies of the tail are the scheduler migrating a thread to a cold core and an unrelated process preempting it mid-cycle. Pinning each thread to a dedicated core keeps its working set warm in that core's cache; `SCHED_FIFO` at high priority tells the kernel not to preempt it for ordinary work. Together they trade some of the machine's general-purpose fairness for a tighter, more predictable latency distribution — exactly the trade a trading system wants to make.
 
-## Running it
+## The matching engine
 
-**Prerequisites:**
+The `exchange` stage is a real **limit order book** — two price-sorted sides (`BTreeMap` of price levels), each a FIFO queue, so matching honours **price-time priority**. It lives in `src/order_book.rs` as a pure, unit-tested module with no IPC dependency; the binary wires it onto the bus and drives it.
 
-- Linux. The scheduling and pinning paths are written for Linux; `SCHED_FIFO` in particular is Linux-only. Raising real-time priority needs the appropriate privilege (run under a user with `CAP_SYS_NICE` or the relevant `rlimit`, or via `sudo` for the demo).
-- A C/C++ toolchain — `clang` (or `gcc`), `cmake`, and `make` — because iceoryx2 builds a native component at compile time.
-- A recent stable Rust toolchain.
+- A **marketable** order crosses the spread and fills against resting liquidity, walking several price levels for size — so a large order **partially fills** at worsening prices (real slippage). `sudo make demo-execution ORDER_UNITS=5` shows this: one order id filling in pieces at different prices.
+- A **passive** limit order (`PASSIVE=1`) rests and only fills once the queue ahead of it clears — so **queue position** is a real thing you can watch.
+- Because a venue's price is whatever its book says, the exchange is also the **market-data source**: seeded synthetic participants post and cancel around a drifting fair value, and the top of book becomes the `MarketTick` stream the strategy trades on (plus an `OrderBookSnapshot` feed for depth). The ticks the strategy sees and the fills it gets come from the *same* book, so `tick-to-fill` is a genuine round-trip through the matcher, not a loopback.
 
-**Run the demo:**
+The matcher's guarantees — price-time priority both sides, partial fills across levels, queue position, cancels — are covered by unit tests in `order_book.rs` (`cargo test`).
 
-```
-make demo
-```
+## Transport benchmark
 
-This starts the `bench-subscriber` and `bench-publisher` binaries as separate processes over the shared-memory service, streams a burst of messages between them, and prints a latency percentile table gathered from the RDTSC deltas once the run completes. (This measures raw transport; `make pipeline` measures a strategy running end-to-end — see below.)
-
-Each line is one 100,000-message window: a single publisher and a single subscriber pinned to separate cores, with the reporter pinned to a third so sorting and printing never touch the receive loop.
-
-**Measured output** (AWS `c7i.xlarge`, Intel Xeon Platinum 8488C, invariant TSC, Ubuntu, 4 vCPU; publisher core 2, subscriber core 3, reporter core 0, both hot threads under `SCHED_FIFO`):
+Separately from the pipeline, `make demo` measures the *raw* iceoryx2 transport: one publisher and one subscriber pinned to separate cores exchanging 100,000-message windows, RDTSC-timed, reporter pinned to a third core so sorting never touches the receive loop. On the c7i.xlarge it lands around **P50 ~850 ns, P99 ~1.25 µs** for end-to-end delivery between two processes:
 
 ```
-n=  100000  Min=    320 ns  P50=    857 ns  P99=   1272 ns  P99.9=   3856 ns  Max=  13176 ns  loss=1.08%
-n=  100000  Min=    330 ns  P50=    850 ns  P99=   1259 ns  P99.9=   5555 ns  Max=  12371 ns  loss=1.11%
-n=  100000  Min=    327 ns  P50=    855 ns  P99=   1254 ns  P99.9=   9192 ns  Max=  12585 ns  loss=0.02%
-n=  100000  Min=    302 ns  P50=    852 ns  P99=   1263 ns  P99.9=   3813 ns  Max=  12243 ns  loss=0.92%
-n=  100000  Min=    311 ns  P50=    850 ns  P99=   1249 ns  P99.9=   6450 ns  Max=  15817 ns  loss=0.02%
+n=100000  Min=320 ns  P50=857 ns  P99=1272 ns  P99.9=3856 ns  Max=13176 ns  loss=1.08%
+n=100000  Min=327 ns  P50=855 ns  P99=1254 ns  P99.9=9192 ns  Max=12585 ns  loss=0.02%
 ```
 
-Steady state on that box lands around **P50 ~850 ns, P99 ~1.25 µs** for end-to-end order delivery between two processes, with sub-0.1% loss once warmed up. (The very first window after startup shows a large `Max` and high loss — the subscriber is still attaching while the publisher is already at full rate — so the numbers above are steady-state windows, not the cold-start one.)
+Numbers won't reproduce exactly elsewhere — the **method** is the portable part: RDTSC instead of a syscall, runtime-calibrated cycles→ns, sort/IO off the pinned receive thread, percentiles not averages (the tail is what a trading path cares about). The `loss` is intentional: the publisher runs flat-out into a bounded ring with safe-overflow, so under imbalance it drops the oldest rather than block the producer — the right call for market data, and a tunable knob.
 
-These will not reproduce exactly on other hardware: absolute latency depends on the CPU, whether the timestamp counter is invariant, how cores are isolated, thermal and frequency state, and machine load. The **method** is the portable part and it is the point: timing with `RDTSC` rather than a syscall, converting cycles to nanoseconds with a runtime-calibrated frequency, keeping the sort and I/O off the pinned receive thread, and reporting percentiles rather than an average so the tail is visible. A mean latency figure on a hot path hides exactly the behavior a trading engineer needs to see; the P99 and P99.9 rows are the ones that matter.
+**What these numbers are — and are not.** The box is a `c7i.xlarge`, an AWS Nitro *VM*, not bare metal. These are **in-process compute + intra-host shared-memory IPC latency** — not wire-to-wire exchange latency; there is no NIC and no kernel-bypass. RDTSC is trustworthy on the VM because the TSC is invariant (`constant_tsc`/`nonstop_tsc`) and Nitro runs `rdtsc` in the guest without a hypervisor trap. Because the hot loops are pinned userspace with no syscalls in steady state, the hypervisor isn't in the critical path — so the **median** is representative of the same microarchitecture on bare metal. The **tail** is where not owning the host shows (no `isolcpus`/`nohz_full`, shared uncore, possible vCPU steal → occasional multi-µs P99.9 outliers). The p50 is the claim; the p99.9 is honest about the environment.
 
-**What these numbers are — and are not.** The box is a `c7i.xlarge`, which is an AWS Nitro *virtual machine*, not bare metal. That is fine for what is being measured, and it is worth being precise about the scope. These figures are **in-process compute and intra-host shared-memory IPC latency** — not wire-to-wire exchange latency; there is no NIC, no kernel-bypass, and the "fill" is a local simulation. The `RDTSC` timing is trustworthy on the VM because the TSC is invariant (`constant_tsc`/`nonstop_tsc`) and Nitro executes `rdtsc` in the guest without a hypervisor trap, so a cycle delta is honest wall-clock time. And because the hot loops are pinned userspace code that makes no syscalls in steady state, the hypervisor is not in the critical path — so the **median** is representative of the same microarchitecture on bare metal. Where the VM shows is the **tail**: without control of the host (no `isolcpus`/`nohz_full`, shared uncore, possible vCPU steal), the P99.9 carries occasional multi-microsecond outliers that dedicated hardware would tighten. The p50 is the claim; the p99.9 is honest about the environment.
+## Tick-to-trade latency
 
-The loss figure is intentional and worth reading: the publisher runs flat-out (tens of millions of messages per second) into a bounded ring with safe-overflow enabled, so under a hard imbalance the ring drops rather than blocks the producer — a deliberate choice for a market-data-style path where the freshest message matters more than delivering every stale one. Sizing the ring, batching the consumer, or rate-matching the producer all move that number; it is a knob, not a defect.
-
-## Custom-strategy execution latency (tick-to-trade)
-
-The benchmark above measures the *transport*. The more interesting number is how fast a **strategy** executes through the pipeline — the tick-to-trade window that runs through the decision logic, not the library. `make pipeline` runs the three-stage `exchange -> strategy -> execution` flow and each stage reports three windows:
+The transport benchmark measures the pipe. The more interesting number is how fast a **strategy** executes through the pipeline. `sudo make demo-latency` runs `exchange → strategy → execution` and reports three windows:
 
 - **decision-only** — the `Strategy::on_price()` call in isolation: three EMAs, a momentum reading, a rolling-window z-score, the weighted blend, and the threshold decision. Pure signal math, no IPC.
 - **tick-to-order** — from the origin tick's timestamp to the moment the strategy emits the order: decision plus one shared-memory hop.
@@ -132,7 +132,7 @@ Reading the breakdown:
 
 In **passive** mode (`PASSIVE=1`, the strategy posts resting limit orders at the touch) tick-to-fill is different in kind, not just degree: it becomes **queue-wait** — the order rests and only fills once flow reaches its price and the queue ahead of it clears — so the p50 is hundreds of µs and the tail runs into milliseconds. That is what making a market actually looks like, and the same window measuring two very different things (taking vs. making) is the point.
 
-So the decomposition still holds where it matters: the *decision* is ~69 ns of my code, the *order hop* is ~810 ns of framework transport, and the *fill* is dominated by the venue — exactly the separation an execution engineer wants to reason about.
+So the split that matters holds: the *decision* is ~69 ns of my code, the *order hop* is ~810 ns of framework transport, and the *fill* is dominated by the venue — exactly the separation an execution engineer reasons about.
 
 **Not perturbing the measurement.** The per-sample cost on the hot path is a timestamp read, a subtract, one float multiply, and a push into a pre-allocated buffer; all sorting and printing happen on a reporter thread pinned to a separate core. The decision-only window is short enough (tens of ns) that the timestamp read itself is a material fraction, so it uses a serializing read (`rdtscp`/`lfence`, so the CPU can't reorder work out of the window) and subtracts a read overhead calibrated at startup. The larger windows are hundreds of ns to µs, where the ~6 ns read is noise, so they use a plain read and no correction. Cross-stage deltas subtract timestamps taken on different cores, which is valid here because this CPU's TSC is invariant and synchronized across cores.
 
