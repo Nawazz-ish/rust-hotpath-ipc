@@ -2,7 +2,7 @@
 # Note: the demo needs Linux (Iceoryx2 shared memory). Real-time scheduling and
 # reliable CPU pinning need root / CAP_SYS_NICE.
 
-.PHONY: build test demo pipeline studio bench docker-build docker-run clean fmt clippy
+.PHONY: build test demo demo-execution demo-latency pipeline studio bench docker-build docker-run clean fmt clippy
 
 build:
 	cargo build --release --bins
@@ -50,6 +50,51 @@ pipeline: build
 	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
 	sleep 1; \
 	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=$(THRESHOLD) MAX_POSITION=$(MAX_POSITION) PASSIVE=$(PASSIVE) ORDER_UNITS=$(ORDER_UNITS) ./target/release/strategy & S=$$!; \
+	sleep 1; \
+	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
+	kill $$S $$E 2>/dev/null || true
+
+# --- Focused presentation targets (one command, one thing proven) ---
+# Both run the same exchange -> strategy -> execution pipeline as `pipeline`;
+# they only differ in the config and the banner telling you what to watch for.
+# Run under sudo for SCHED_FIFO. Let it run ~15s, then Ctrl-C and read the output.
+
+# ORDER EXECUTION: multi-unit orders (ORDER_UNITS=5) sweep several book levels, so
+# a single order fills in pieces at worsening prices — a real partial fill against
+# a real order book. Watch the execution lines: `fill # N ... (partial)` where the
+# same order id fills twice at different px. MAX_POSITION scales with the size.
+demo-execution: build
+	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
+	@echo "======================================================================"
+	@echo " ORDER-EXECUTION DEMO — watch the [exec] lines for PARTIAL FILLS:"
+	@echo "   fill # N  SELL  px=..  qty=3.00 .. (partial)   <- same order id,"
+	@echo "   fill # N  SELL  px=..  qty=2.00 ..             <- two prices = one"
+	@echo "   order swept two levels of the book. Ctrl-C after ~15s."
+	@echo "======================================================================"
+	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
+	sleep 1; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.12 MAX_POSITION=50 ORDER_UNITS=5 ./target/release/strategy & S=$$!; \
+	sleep 1; \
+	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
+	kill $$S $$E 2>/dev/null || true
+
+# TICK-TO-TRADE LATENCY: the three RDTSC windows. Watch the `LAT` lines:
+#   decision-only ~65ns  (the strategy math — my code)
+#   tick-to-order ~900ns (decision + one shared-memory hop)
+#   tick-to-fill  ~80us  (full round-trip to the matcher; the match is 450ns, the
+#                         rest is cross-core cache-line visibility under sparse flow)
+demo-latency: build
+	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
+	@echo "======================================================================"
+	@echo " TICK-TO-TRADE LATENCY DEMO — watch the three LAT windows:"
+	@echo "   LAT decision-only  ~65 ns   (strategy math, off the hot path)"
+	@echo "   LAT tick-to-order  ~900 ns  (decision + one iceoryx2 hop)"
+	@echo "   LAT tick-to-fill   ~80 us   (round-trip to the real matcher)"
+	@echo "   Ctrl-C after ~15s; they also print on shutdown."
+	@echo "======================================================================"
+	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
+	sleep 1; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.12 MAX_POSITION=3 ./target/release/strategy & S=$$!; \
 	sleep 1; \
 	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
 	kill $$S $$E 2>/dev/null || true
