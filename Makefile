@@ -105,8 +105,16 @@ demo-latency: build
 
 # Visual strategy builder: control server + web UI on :8080, driving the real
 # pipeline with a live latency panel. `sudo make studio` for RT scheduling.
+# The UI is a plain static file — nothing to compile. To view it from a laptop
+# when the server is remote, forward the port over SSH (no public port needed).
 studio: build
-	@echo "open http://localhost:8080  (or tunnel: ssh -L 8080:localhost:8080 ...)"
+	@echo "======================================================================"
+	@echo " Strategy builder serving on http://localhost:8080"
+	@echo ""
+	@echo " Remote box? From YOUR laptop, tunnel the port, then open the URL:"
+	@echo "   ssh -i <key.pem> -L 8080:localhost:8080 <user>@<host>"
+	@echo "   # then browse to  http://localhost:8080"
+	@echo "======================================================================"
 	./target/release/control-server
 
 bench:
