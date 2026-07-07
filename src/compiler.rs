@@ -1,7 +1,7 @@
-//! Compile a strategy graph (the node/connection spec the visual builder emits)
-//! into a flat bytecode program for [`crate::bytecode::Vm`].
+//! Compile a strategy graph (a node/connection spec) into a flat bytecode program
+//! for [`crate::bytecode::Vm`].
 //!
-//! The builder posts a graph like:
+//! The graph JSON looks like:
 //! ```json
 //! { "canvas": { "nodes": [ {"id","type","properties":{...}}, ... ],
 //!               "connections": [ {"from","to"}, ... ] } }
@@ -12,8 +12,9 @@
 //! node itself), which for a stack machine means operands land on the stack
 //! before the operator that consumes them.
 //!
-//! This is what makes the drawn graph *actually run*: change the wiring and the
-//! emitted program changes, rather than the graph only tuning fixed parameters.
+//! This is what makes the graph *actually run*: change the wiring and the emitted
+//! program changes, rather than the graph only tuning fixed parameters. Exercised
+//! from the CLI via the `disasm` binary (see `examples/graph.json`).
 
 use crate::bytecode::Op;
 use std::collections::HashMap;

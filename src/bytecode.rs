@@ -1,8 +1,7 @@
 //! A tiny stack-machine bytecode and interpreter for graph-defined strategies.
 //!
-//! A strategy the user draws in the visual builder is compiled (see
-//! [`crate::compiler`]) into a flat program of [`Op`]s and executed by [`Vm`]
-//! once per market tick. This mirrors the platform's strategy VM: a stack of
+//! A strategy expressed as a node graph is compiled (see [`crate::compiler`])
+//! into a flat program of [`Op`]s and executed by [`Vm`] once per market tick. This mirrors the platform's strategy VM: a stack of
 //! `f64`, booleans as `1.0`/`0.0`, operands pushed before their operator, and a
 //! terminal `Buy`/`Sell` opcode that pops a truthy condition.
 //!

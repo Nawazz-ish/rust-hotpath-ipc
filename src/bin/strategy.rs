@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let order_notifier = order_event.notifier_builder().create()?;
 
     // The strategy is fully env-tunable so the same binary can be driven by the
-    // visual builder (which passes signal weights and thresholds) without a
+    // strategy console (which passes signal weights and thresholds) without a
     // rebuild. Any unset knob keeps its default.
     let mut cfg = StrategyConfig::default();
     let envf = |k: &str| env::var(k).ok().and_then(|v| v.parse::<f64>().ok());
@@ -163,8 +163,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (whose interval is short enough that the read overhead is material).
     let rdtsc_floor = calibrate_rdtsc_floor();
 
-    // If STRATEGY_JSON points at a graph the visual builder produced, compile it
-    // to bytecode and run THAT per tick — the drawn graph actually drives
+    // If STRATEGY_JSON points at a strategy graph (see examples/graph.json),
+    // compile it to bytecode and run THAT per tick — the graph actually drives
     // execution. A parse or compile failure is reported (not silently ignored),
     // and the strategy falls back to the hand-written composite.
     let mut vm: Option<Vm> = match env::var("STRATEGY_JSON").ok() {

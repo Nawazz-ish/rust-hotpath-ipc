@@ -2,7 +2,7 @@
 # Note: the demo needs Linux (Iceoryx2 shared memory). Real-time scheduling and
 # reliable CPU pinning need root / CAP_SYS_NICE.
 
-.PHONY: build test demo demo-execution demo-latency pipeline studio bench docker-build docker-run clean fmt clippy
+.PHONY: build test demo demo-execution demo-latency pipeline studio require-bins bench docker-build docker-run clean fmt clippy
 
 build:
 	cargo build --release --bins
@@ -44,7 +44,7 @@ THRESHOLD ?= 0.25
 MAX_POSITION ?= 3
 PASSIVE ?= 0
 ORDER_UNITS ?= 1
-pipeline: build
+pipeline: require-bins
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), exchange (core $(EXCH_CORE)); reporters on core $(REPORTER_CORE)"
 	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
@@ -58,13 +58,31 @@ pipeline: build
 # Both run the same exchange -> strategy -> execution pipeline as `pipeline`;
 # they only differ in the config and the banner telling you what to watch for.
 # Run under sudo for SCHED_FIFO. Let it run ~15s, then Ctrl-C and read the output.
+#
+# IMPORTANT: these run targets do NOT depend on `build`. When a Rust toolchain is
+# installed per-user (rustup in $HOME/.cargo), `cargo` is not on root's PATH, so a
+# `cargo build` invoked under `sudo` fails with "cargo: No such file or directory".
+# So the flow is two steps: `make build` (as your user, once) then `sudo make
+# demo-execution`. `require-bins` gives a clear error instead of a confusing one if
+# you forget the build step.
+
+# Fail early with a helpful message if the binaries aren't built yet, rather than
+# trying to `cargo build` under sudo (which can't find a per-user cargo).
+require-bins:
+	@for b in exchange strategy execution; do \
+	  if [ ! -x target/release/$$b ]; then \
+	    echo "error: target/release/$$b not found."; \
+	    echo "  Run 'make build' as your normal user first, THEN 'sudo make <demo>'."; \
+	    exit 1; \
+	  fi; \
+	done
 
 # ORDER EXECUTION: multi-unit orders (ORDER_UNITS=5) sweep several book levels, so
 # a single order fills in pieces at worsening prices — a real partial fill against
 # a real order book. Watch the execution lines: `fill # N ... (partial)` where the
 # same order id fills twice at different px, and `pnl=` (mark-to-market P&L).
 # COOLDOWN=8 keeps orders flowing; MAX_POSITION is in units so it scales with size.
-demo-execution: build
+demo-execution: require-bins
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "======================================================================"
 	@echo " ORDER-EXECUTION DEMO — watch the [exec] lines for PARTIAL FILLS:"
@@ -87,7 +105,7 @@ demo-execution: build
 #   tick-to-order ~900ns (decision + one shared-memory hop)
 #   tick-to-fill  ~80us  (full round-trip to the matcher; the match is 450ns, the
 #                         rest is cross-core cache-line visibility under sparse flow)
-demo-latency: build
+demo-latency: require-bins
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "======================================================================"
 	@echo " TICK-TO-TRADE LATENCY DEMO — watch the three LAT windows:"
@@ -107,7 +125,7 @@ demo-latency: build
 # pipeline with a live latency panel. `sudo make studio` for RT scheduling.
 # The UI is a plain static file — nothing to compile. To view it from a laptop
 # when the server is remote, forward the port over SSH (no public port needed).
-studio: build
+studio: require-bins
 	@echo "======================================================================"
 	@echo " Strategy builder serving on http://localhost:8080"
 	@echo ""

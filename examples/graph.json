@@ -1,0 +1,22 @@
+{
+  "name": "Momentum + reversion (sample)",
+  "canvas": {
+    "nodes": [
+      { "id": "data", "type": "data_source", "properties": {} },
+      { "id": "mom",  "type": "momentum",  "properties": { "lookback": 16 } },
+      { "id": "gt",   "type": "condition", "properties": { "op": "greater_than", "value": 0.15 } },
+      { "id": "buy",  "type": "buy_signal", "properties": {} },
+      { "id": "rev",  "type": "reversion", "properties": { "window": 64 } },
+      { "id": "lt",   "type": "condition", "properties": { "op": "less_than", "value": -0.15 } },
+      { "id": "sell", "type": "sell_signal", "properties": {} }
+    ],
+    "connections": [
+      { "from": "data", "to": "mom" },
+      { "from": "mom",  "to": "gt" },
+      { "from": "gt",   "to": "buy" },
+      { "from": "data", "to": "rev" },
+      { "from": "rev",  "to": "lt" },
+      { "from": "lt",   "to": "sell" }
+    ]
+  }
+}

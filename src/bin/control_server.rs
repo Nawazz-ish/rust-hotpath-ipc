@@ -1,17 +1,20 @@
-//! Control server for the visual strategy builder.
+//! Control server for the strategy console.
 //!
 //! This is the *control plane* — it is deliberately NOT on the hot path. It:
-//!   1. serves the single-page strategy builder (`webui/index.html`),
-//!   2. accepts a strategy graph (the node/connection spec the builder exports)
-//!      on `POST /run`,
-//!   3. translates that graph into the `StrategyConfig` knobs the real Rust
-//!      strategy engine reads (signal weights, threshold, position limit),
-//!   4. launches the exchange -> strategy -> execution pipeline as three processes,
-//!   5. streams their combined output back to the browser as Server-Sent Events
-//!      so you watch orders and mark-to-market P&L live.
+//!   1. serves the single-page strategy console (`webui/index.html`),
+//!   2. accepts a set of strategy parameters (signal weights, threshold, position
+//!      limit, market volatility) on `POST /run`,
+//!   3. launches the exchange -> strategy -> execution pipeline as three processes
+//!      with those knobs applied,
+//!   4. streams their combined output back to the browser as Server-Sent Events
+//!      so you watch orders, fills and mark-to-market P&L live, and
+//!   5. tears the pipeline down cleanly on `POST /stop`.
 //!
-//! The point is that the picture you draw in the browser actually configures and
-//! runs the low-latency engine — no separate simulation.
+//! The point is that the knobs you set in the browser actually configure and run
+//! the low-latency engine — no separate simulation.
+//!
+//! (The separate graph -> bytecode compiler lives in `src/compiler.rs` and is
+//! exercised from the CLI via the `disasm` binary; it is not driven from here.)
 //!
 //! Run:  cargo run --release --bin control-server
 //! Then open http://localhost:8080
@@ -57,10 +60,19 @@ struct RunningPipeline {
 
 impl RunningPipeline {
     fn kill(&mut self) {
+        // Kill the children we spawned...
         for c in &mut self.children {
             let _ = c.kill();
             let _ = c.wait();
         }
+        // ...then a belt-and-braces sweep for any stage that outlived its parent
+        // handle (e.g. a re-niced SCHED_FIFO strategy), and clear the shared-memory
+        // segments so the next Run starts clean. Without this a "Stop" can leave a
+        // stage running and the UI keeps streaming orders.
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("pkill -9 -f 'target/release/(exchange|strategy|execution)' 2>/dev/null; rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null")
+            .status();
     }
 }
 
@@ -132,23 +144,11 @@ fn run_pipeline(mut request: tiny_http::Request, hub: Arc<Mutex<Hub>>) {
     let mut body = String::new();
     let _ = request.as_reader().read_to_string(&mut body);
 
-    let params = StrategyParams::from_graph_json(&body);
+    let params = StrategyParams::from_params_json(&body);
     log_line(
         &hub,
         format!("[control] launching pipeline: {}", params.describe()),
     );
-
-    // Persist the drawn graph so the strategy stage can compile it to bytecode
-    // and run THAT (rather than only the parametric fallback). Written to a fixed
-    // temp path the strategy reads via STRATEGY_JSON.
-    let graph_path = std::env::temp_dir().join("rust_hotpath_strategy.json");
-    let has_graph = std::fs::write(&graph_path, &body).is_ok() && body.contains("\"nodes\"");
-    if has_graph {
-        log_line(
-            &hub,
-            format!("[control] strategy graph -> {}", graph_path.display()),
-        );
-    }
 
     // Stop any prior run first.
     {
@@ -158,13 +158,7 @@ fn run_pipeline(mut request: tiny_http::Request, hub: Arc<Mutex<Hub>>) {
         }
     }
 
-    let graph_arg = if has_graph {
-        Some(graph_path.to_string_lossy().to_string())
-    } else {
-        None
-    };
-
-    match launch(&params, graph_arg.as_deref(), hub.clone()) {
+    match launch(&params, hub.clone()) {
         Ok(pipeline) => {
             hub.lock().unwrap().running = Some(pipeline);
             respond_json(request, r#"{"ok":true}"#);
@@ -186,10 +180,9 @@ fn stop_pipeline(request: tiny_http::Request, hub: Arc<Mutex<Hub>>) {
     respond_json(request, r#"{"ok":true}"#);
 }
 
-/// The knobs we extract from a strategy graph. The visual builder emits a
-/// node/connection graph; here we reduce it to the parameters the composite
-/// strategy engine understands. A richer mapping would walk the DAG, but for the
-/// demo we read the presence/weight of indicator + signal nodes.
+/// The knobs the console sets. The browser sends a small JSON `params` object;
+/// here we reduce it to the parameters the composite strategy engine understands
+/// (signal weights, decision threshold, position cap, market volatility).
 struct StrategyParams {
     weight_trend: f64,
     weight_momentum: f64,
@@ -215,11 +208,10 @@ impl Default for StrategyParams {
 }
 
 impl StrategyParams {
-    /// Extract parameters from the builder's JSON. We do a light, dependency-free
-    /// scan: the builder sends a flat `params` object alongside the graph, so we
-    /// pull the numbers we need out of it. (Full DAG interpretation lives in the
-    /// Rust strategy-studio engine; this control plane only needs the knobs.)
-    fn from_graph_json(body: &str) -> Self {
+    /// Extract parameters from the console's JSON. A light, dependency-free scan:
+    /// the browser sends a flat `params` object, so we pull the numbers we need
+    /// out of it directly.
+    fn from_params_json(body: &str) -> Self {
         let mut p = Self::default();
         let get = |key: &str| -> Option<f64> {
             let pat = format!("\"{key}\"");
@@ -269,11 +261,7 @@ impl StrategyParams {
 }
 
 /// Launch exchange + strategy + execution, each with stdout piped into the hub.
-fn launch(
-    p: &StrategyParams,
-    graph_json_path: Option<&str>,
-    hub: Arc<Mutex<Hub>>,
-) -> Result<RunningPipeline, String> {
+fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, String> {
     // Clean any stale iceoryx2 state so a fresh run starts clean.
     let _ = std::process::Command::new("sh")
         .arg("-c")
@@ -303,7 +291,7 @@ fn launch(
     let execution = spawn_stage(&exe("execution"), &[("CPU_CORE", "3".into())], "exec", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
 
-    let mut strat_env: Vec<(&str, String)> = vec![
+    let strat_env: Vec<(&str, String)> = vec![
         ("CPU_CORE", "2".into()),
         ("THRESHOLD", format!("{}", p.threshold)),
         ("WEIGHT_TREND", format!("{}", p.weight_trend)),
@@ -311,10 +299,6 @@ fn launch(
         ("WEIGHT_REVERSION", format!("{}", p.weight_reversion)),
         ("MAX_POSITION", format!("{}", p.max_position)),
     ];
-    // Hand the drawn graph to the strategy so it compiles + runs the bytecode.
-    if let Some(path) = graph_json_path {
-        strat_env.push(("STRATEGY_JSON", path.to_string()));
-    }
     let strategy = spawn_stage(&exe("strategy"), &strat_env, "strat", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
 

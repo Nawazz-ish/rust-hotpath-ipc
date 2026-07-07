@@ -8,10 +8,18 @@ Linux, a recent stable Rust toolchain, and a C/C++ toolchain (`clang`/`gcc`, `cm
 
 ```sh
 cargo test              # unit tests — the matcher's guarantees are proven here
+make build              # build the release binaries as your user (see note below)
 sudo make demo-execution  # watch orders sweep the book and PARTIALLY FILL, with live P&L
 sudo make demo-latency    # the three tick-to-trade latency windows (decision / order / fill)
-sudo make studio          # visual strategy builder + live pipeline on http://localhost:8080
+sudo make studio          # strategy console: tune params + live pipeline on http://localhost:8080
 ```
+
+Build once as your normal user, *then* run the demos under `sudo`. This two-step
+split is deliberate: with a per-user Rust toolchain (rustup in `$HOME/.cargo`),
+`cargo` isn't on root's `PATH`, so a `cargo build` invoked under `sudo` would fail
+with `cargo: No such file or directory`. `make build` compiles as you; the `sudo
+make demo-*` targets only *run* the already-built binaries (they need root for
+`SCHED_FIFO`), and error out with a clear message if you skipped the build.
 
 The three `make demo-*` targets run the same `exchange → strategy → execution` pipeline, pinned to cores 1/2/3 with latency reporters on core 0; let each run ~15 seconds then `Ctrl-C`. Tunables are env vars (`TICK_US`, `THRESHOLD`, `MAX_POSITION`, `ORDER_UNITS`, `PASSIVE=1`, `WAIT_MODE=waitset`) — e.g. `sudo make demo-execution ORDER_UNITS=5`. `make demo` runs the raw transport microbenchmark on its own. Viewing `studio` from a laptop when the server is remote: forward the port with `ssh -L 8080:localhost:8080 …`, then open `localhost:8080`.
 
@@ -40,7 +48,7 @@ src/
   hot_path.rs        the 64-byte POD message contract + rdtsc()  (the wire types iceoryx2 carries)
   order_book.rs      the limit order book + matcher (price-time priority, partial fills, cancels)
   strategy.rs        composite trend / momentum / mean-reversion strategy
-  compiler.rs        a drawn strategy graph  ->  a flat bytecode program
+  compiler.rs        a strategy graph (JSON)  ->  a flat bytecode program
   bytecode.rs        a stack VM that interprets that program, once per tick
   latency_window.rs  the off-hot-path latency recorder (lock-free push, off-core aggregation)
   tsc_calibration.rs cycle <-> nanosecond calibration
@@ -48,10 +56,10 @@ src/
     exchange.rs      pipeline stage 1: mock exchange (order-book matcher + market)  } the trading
     strategy.rs      pipeline stage 2: signal -> risk -> OrderCommand              } system —
     execution.rs     pipeline stage 3: consumes fills, tracks position + P&L       } run all three
-    control-server.rs serves the visual builder and launches the pipeline
+    control-server.rs serves the strategy console and launches the pipeline
     disasm.rs        tool: print the bytecode a strategy graph compiles to
     bench-publisher.rs / bench-subscriber.rs   a microbenchmark of raw iceoryx2 transport latency
-webui/               the drag-and-drop strategy builder (a thin UI over the real engine)
+webui/               the strategy console (a thin UI that tunes + runs the real engine)
 ```
 
 The iceoryx2 calls all live in these binaries. The core sequence, from `exchange.rs`: `publisher.loan_uninit()` borrows an uninitialized slot **that physically lives in the shared-memory segment**, `write_payload(tick)` writes the 64-byte message straight into that slot, and `send()` publishes by handing off the pointer — no copy. The consumer's `receive()` returns a reference to those same bytes, read in place. That `loan → write → send` / `receive` cycle, over POD messages that are safe to interpret byte-for-byte in another process, *is* the zero-copy path.
@@ -136,7 +144,7 @@ So the split that matters holds: the *decision* is ~69 ns of my code, the *order
 
 **Not perturbing the measurement.** The per-sample cost on the hot path is a timestamp read, a subtract, one float multiply, and a push into a pre-allocated buffer; all sorting and printing happen on a reporter thread pinned to a separate core. The decision-only window is short enough (tens of ns) that the timestamp read itself is a material fraction, so it uses a serializing read (`rdtscp`/`lfence`, so the CPU can't reorder work out of the window) and subtracts a read overhead calibrated at startup. The larger windows are hundreds of ns to µs, where the ~6 ns read is noise, so they use a plain read and no correction. Cross-stage deltas subtract timestamps taken on different cores, which is valid here because this CPU's TSC is invariant and synchronized across cores.
 
-The visual builder (`make studio`, then open `:8080`) shows these three windows and the decision-vs-transport breakdown live while a strategy you draw runs.
+The strategy console (`make studio`, then open `:8080`) shows these three windows and the decision-vs-transport breakdown live while you tune the strategy's weights, threshold and risk cap and watch orders, fills and P&L stream in.
 
 ## Waiting for the next tick: busy-poll vs. blocking
 
@@ -156,9 +164,9 @@ So blocking frees the core but adds ~7 µs of wake-up latency — about 7× the 
 
 ## Graph-defined strategies compiled to bytecode
 
-The strategy above is hand-written Rust. The visual builder lets you *draw* a strategy from nodes (indicators, conditions, logic gates, buy/sell signals), and that graph is not just tuning parameters — it is **compiled to a flat bytecode program and interpreted per tick**. Change the wiring and the emitted program changes, so the drawn graph genuinely drives execution.
+The strategy above is hand-written Rust. Separately, a strategy expressed as a node **graph** (indicators, conditions, logic gates, buy/sell signals) is not just tuning parameters — it is **compiled to a flat bytecode program and interpreted per tick**. Change the wiring and the emitted program changes, so the graph genuinely drives execution. (This is a standalone compiler/VM, exercised from the CLI — `cargo run --bin disasm -- examples/graph.json` — not wired into the web console, which is parametric.)
 
-The compiler (`src/compiler.rs`) topologically lowers the node graph, emitting operands before the operators that consume them; the VM (`src/bytecode.rs`) is a stack machine over `f64` with the terminal `BUY`/`SELL` opcodes popping a truthy condition. Indicators are stateful ops — each carries an index into a state vector that persists across ticks — so they work on a live tick stream rather than a precomputed series. A drawn graph disassembles like this (opcodes are in the same space as the parent platform's VM — `BUY = 0x30`, `GT = 0x50`):
+The compiler (`src/compiler.rs`) topologically lowers the node graph, emitting operands before the operators that consume them; the VM (`src/bytecode.rs`) is a stack machine over `f64` with the terminal `BUY`/`SELL` opcodes popping a truthy condition. Indicators are stateful ops — each carries an index into a state vector that persists across ticks — so they work on a live tick stream rather than a precomputed series. A graph disassembles like this (opcodes are in the same space as the parent platform's VM — `BUY = 0x30`, `GT = 0x50`):
 
 ```
   0  0x61  MOMENTUM  lookback=16 slot=0
@@ -190,7 +198,7 @@ The obvious follow-up — is the interpreter really doing the work, or is the op
 
 Latency grows roughly linearly at ~5–6 ns per op (~15–18 cycles), exactly what a match-dispatch plus a couple of arithmetic ops per instruction should cost. If the VM were being optimized away the three would be indistinguishable; instead the cost tracks the work, which is the evidence that the interpreter is genuinely executing the compiled graph.
 
-A note on faithful compilation: the compiler rejects ambiguous graphs (e.g. two indicators wired straight into one condition) with a clear error rather than silently dropping an input, so the disassembly always matches the graph you drew. Use `cargo run --bin disasm -- graph.json` to see the compiled bytecode for any graph.
+A note on faithful compilation: the compiler rejects ambiguous graphs (e.g. two indicators wired straight into one condition) with a clear error rather than silently dropping an input, so the disassembly always matches the graph as written. Use `cargo run --bin disasm -- examples/graph.json` to see the compiled bytecode for a sample graph.
 
 ## What I'd do next
 
