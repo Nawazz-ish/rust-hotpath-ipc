@@ -51,6 +51,15 @@ ORDER_UNITS ?= 1
 # every demo run, so a file always reflects the latest run only. Override with
 # `make demo-execution LOGDIR=/some/path`.
 LOGDIR ?= ./logs
+
+# Bounds that make the demos FINITE and self-terminating (deterministic with the
+# fixed seed): demo-execution stops after DEMO_FILLS completed orders; demo-latency
+# stops after DEMO_ORDERS orders. demo-latency's default is high on purpose — the
+# tick-to-order / tick-to-fill windows flush every 2000 samples, so a smaller bound
+# would leave them in warmup and never print. Set either to 0 to run until Ctrl-C.
+# (studio stays unbounded regardless — you want it flowing during a live demo.)
+DEMO_FILLS  ?= 800
+DEMO_ORDERS ?= 3000
 pipeline: require-bins
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), exchange (core $(EXCH_CORE)); reporters on core $(REPORTER_CORE)"
@@ -100,16 +109,16 @@ demo-execution: require-bins
 	@echo "   order swept two levels of the book. pnl= is mark-to-market P&L."
 	@echo "   (pos= is the *realized* net; the strategy caps *intended* exposure,"
 	@echo "    so realized can lag it across flips — a real reconciliation gap.)"
-	@echo "   Ctrl-C after ~15s."
+	@echo "   Stops on its own after $(DEMO_FILLS) completed orders (or Ctrl-C sooner)."
 	@echo ""
 	@echo " Full per-stage logs (this run only): $(LOGDIR)/{exec,strat,exch}.log"
 	@echo "======================================================================"
 	@echo "  execution runs in the foreground (fills + P&L on screen AND in exec.log);"
-	@echo "  exchange + strategy log to their files. Ctrl-C stops execution and reaps them."
+	@echo "  exchange + strategy log to their files. It exits when done and reaps them."
 	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange > $(LOGDIR)/exch.log 2>&1 & X=$$!; \
 	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.10 MAX_POSITION=50 ORDER_UNITS=5 COOLDOWN=8 ./target/release/strategy > $(LOGDIR)/strat.log 2>&1 & S=$$!; \
 	sleep 1; \
-	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution 2>&1 | tee $(LOGDIR)/exec.log; \
+	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) MAX_FILLS=$(DEMO_FILLS) ./target/release/execution 2>&1 | tee $(LOGDIR)/exec.log; \
 	kill $$S $$X 2>/dev/null || true
 
 # TICK-TO-TRADE LATENCY: the three RDTSC windows. Watch the `LAT` lines:
@@ -126,17 +135,18 @@ demo-latency: require-bins
 	@echo "   LAT decision-only  ~65 ns   (strategy math, off the hot path)"
 	@echo "   LAT tick-to-order  ~900 ns  (decision + one iceoryx2 hop)"
 	@echo "   LAT tick-to-fill   ~80 us   (round-trip to the real matcher)"
-	@echo "   Ctrl-C after ~15s; they also print on shutdown."
+	@echo "   Stops on its own after $(DEMO_ORDERS) orders (enough to flush every"
+	@echo "   window at least once), or Ctrl-C sooner; windows also print on shutdown."
 	@echo ""
 	@echo " Full per-stage logs (this run only): $(LOGDIR)/{exec,strat,exch}.log"
 	@echo "   decision-only + tick-to-order -> strat.log ; tick-to-fill -> exec.log"
 	@echo "======================================================================"
 	@echo "  strategy runs in the foreground (decision-only + tick-to-order LAT on screen"
-	@echo "  AND in strat.log); tick-to-fill is in exec.log. Ctrl-C stops it and reaps the rest."
+	@echo "  AND in strat.log); tick-to-fill is in exec.log. It exits when done and reaps the rest."
 	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution > $(LOGDIR)/exec.log 2>&1 & E=$$!; \
 	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange > $(LOGDIR)/exch.log 2>&1 & X=$$!; \
 	sleep 1; \
-	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.12 MAX_POSITION=3 ./target/release/strategy 2>&1 | tee $(LOGDIR)/strat.log; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.12 MAX_POSITION=3 MAX_ORDERS=$(DEMO_ORDERS) ./target/release/strategy 2>&1 | tee $(LOGDIR)/strat.log; \
 	kill $$E $$X 2>/dev/null || true
 
 # Visual strategy builder: control server + web UI on :8080, driving the real

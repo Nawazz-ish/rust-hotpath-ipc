@@ -21,7 +21,7 @@ with `cargo: No such file or directory`. `make build` compiles as you; the `sudo
 make demo-*` targets only *run* the already-built binaries (they need root for
 `SCHED_FIFO`), and error out with a clear message if you skipped the build.
 
-The three `make demo-*` targets run the same `exchange → strategy → execution` pipeline, pinned to cores 1/2/3 with latency reporters on core 0; let each run ~15 seconds then `Ctrl-C`. Tunables are env vars (`TICK_US`, `THRESHOLD`, `MAX_POSITION`, `ORDER_UNITS`, `PASSIVE=1`, `WAIT_MODE=waitset`) — e.g. `sudo make demo-execution ORDER_UNITS=5`. `make demo` runs the raw transport microbenchmark on its own. Viewing `studio` from a laptop when the server is remote: forward the port with `ssh -L 8080:localhost:8080 …`, then open `localhost:8080`.
+The three `make demo-*` targets run the same `exchange → strategy → execution` pipeline, pinned to cores 1/2/3 with latency reporters on core 0. They are **finite and self-terminating**: `demo-execution` stops after `DEMO_FILLS` completed orders and `demo-latency` after `DEMO_ORDERS` orders (deterministic with the fixed seed — same output every run), or `Ctrl-C` sooner. Each stage's full output is written to `./logs/{exec,strat,exch}.log` (wiped at the start of every run), with the live stage streamed to the terminal too. Tunables are env vars (`DEMO_FILLS`, `DEMO_ORDERS`, `TICK_US`, `THRESHOLD`, `MAX_POSITION`, `ORDER_UNITS`, `PASSIVE=1`, `WAIT_MODE=waitset`) — e.g. `sudo make demo-execution ORDER_UNITS=5`. `make demo` runs the raw transport microbenchmark on its own. `studio` runs unbounded (it's the live UI); view it from a laptop when the server is remote by forwarding the port with `ssh -L 8080:localhost:8080 …`, then open `localhost:8080`.
 
 ## Architecture
 

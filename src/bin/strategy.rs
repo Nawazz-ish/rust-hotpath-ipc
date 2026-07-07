@@ -136,6 +136,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // strong the signal is. Real systems layer notional and loss limits here too.
     let max_position: i64 = env_or("MAX_POSITION", 3);
 
+    // Optional bound: stop after this many orders are sent, then shut the whole
+    // pipeline down cleanly. 0 (the default) means run until Ctrl-C — that's the
+    // right mode for the live studio demo, where you want it flowing while you
+    // talk. The finite demos set MAX_ORDERS so a run is deterministic (fixed seed
+    // -> identical output), self-terminating, and produces a fixed-size log.
+    let max_orders: u64 = env_or("MAX_ORDERS", 0);
+
     // Order size in whole units. The default 1.0 fills whole against a single
     // maker; sizing up past a typical resting level makes the order sweep several
     // price levels, so the exchange returns partial fills — worth setting when you
@@ -346,6 +353,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // tick-to-order window: origin tick (T0) -> order emitted (T1).
             win_tick_to_order.push(fast_cycles_to_ns(t1.saturating_sub(t0)));
+
+            // Bounded mode: once we've sent the requested number of orders, stop
+            // the loop so the run is finite and self-terminating. Give the fills
+            // a beat to come back before we tear down, so the tick-to-fill window
+            // and the final P&L reflect the orders we just sent.
+            if max_orders != 0 && orders_sent >= max_orders {
+                running.store(false, Ordering::SeqCst);
+            }
 
             println!(
                 "order #{:>5}  {:<4}  px={:>10.2}  score={:+.3}  pos={:>+3}  (tick {})",

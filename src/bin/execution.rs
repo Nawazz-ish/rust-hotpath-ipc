@@ -44,6 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctrlc::set_handler(move || running.store(false, Ordering::SeqCst))?;
     }
 
+    // Optional bound: stop after this many terminal fills, then exit cleanly with
+    // the final position + P&L summary. 0 (the default) means run until Ctrl-C.
+    // The finite `demo-execution` sets this so the run self-terminates with a
+    // deterministic, fixed-size log instead of streaming forever.
+    let max_fills: u64 = env_or("MAX_FILLS", 0);
+
     let node = NodeBuilder::new().create::<ipc::Service>()?;
 
     // Primary input: fills from the exchange.
@@ -94,6 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cash = 0.0_f64; // realized cash flow: sells add, buys subtract
     let mut last_price = 0.0_f64;
     let mut fills = 0u64;
+    let mut completed_orders = 0u64; // terminal (status=2) fills — one per order
 
     while running.load(Ordering::Relaxed) {
         // Drain any pending orders first so a fill always finds its context.
@@ -150,6 +157,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             // Order is done; drop its context to keep the map bounded.
             order_ctx.remove(&report.order_id);
+            completed_orders += 1;
+            // Bounded mode: stop once we've booked the requested number of
+            // completed orders, so the run is finite and exits with a summary.
+            if max_fills != 0 && completed_orders >= max_fills {
+                running.store(false, Ordering::SeqCst);
+            }
         }
 
         // Mark-to-market P&L: realized cash flow + value of the open position.
