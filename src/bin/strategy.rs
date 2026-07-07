@@ -25,6 +25,10 @@ use rust_hotpath_ipc::strategy::{Decision, Side, Strategy, StrategyConfig};
 use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Keep iceoryx2's own logging to errors only (its info/warn chatter would
+    // otherwise clutter the pipeline output).
+    set_log_level(LogLevel::Error);
+
     // Busy-spin consumer on the hot path: pin it and raise it to real-time
     // priority so the kernel does not preempt it mid-decision.
     pin_and_prioritize(env_or("CPU_CORE", 2), "strategy");

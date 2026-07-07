@@ -29,6 +29,9 @@ use rust_hotpath_ipc::runtime::{env_or, pin_only};
 use rust_hotpath_ipc::tsc_calibration::fast_cycles_to_ns;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Keep iceoryx2's own logging to errors only so the fill/P&L output is clean.
+    set_log_level(LogLevel::Error);
+
     // Pinned but not real-time: it accounts fills off the tightest loop and stays
     // preemptible so it never blocks the reporter.
     let cpu_id: usize = env_or("CPU_CORE", 3);

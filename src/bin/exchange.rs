@@ -194,6 +194,12 @@ impl Participants {
 // ============================================================================
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Quiet iceoryx2's own logging to errors only. It logs a warning every time a
+    // notify has no listener (expected in poll mode, where the market-event is
+    // unused) — at tens of thousands a second that floods the demo output and
+    // burns cycles. Errors we still want to see.
+    set_log_level(LogLevel::Error);
+
     // Paced producer of market data (like the old feed), so it pins to its core
     // but does not take real-time priority — the strategy is the only busy-spin
     // RT loop, which keeps the four vCPUs from being oversubscribed.
