@@ -44,6 +44,13 @@ THRESHOLD ?= 0.25
 MAX_POSITION ?= 3
 PASSIVE ?= 0
 ORDER_UNITS ?= 1
+
+# Where the demo targets write their per-stage logs. Each stage gets its own file
+# (exec.log / strat.log / exch.log) so the full, un-truncated output is on disk
+# even though the terminal only shows the tail. Old logs are wiped at the start of
+# every demo run, so a file always reflects the latest run only. Override with
+# `make demo-execution LOGDIR=/some/path`.
+LOGDIR ?= ./logs
 pipeline: require-bins
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "starting execution (core $(EXEC_CORE)), strategy (core $(STRAT_CORE)), exchange (core $(EXCH_CORE)); reporters on core $(REPORTER_CORE)"
@@ -84,6 +91,8 @@ require-bins:
 # COOLDOWN=8 keeps orders flowing; MAX_POSITION is in units so it scales with size.
 demo-execution: require-bins
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
+	@rm -f $(LOGDIR)/*.log 2>/dev/null || true
+	@mkdir -p $(LOGDIR)
 	@echo "======================================================================"
 	@echo " ORDER-EXECUTION DEMO — watch the [exec] lines for PARTIAL FILLS:"
 	@echo "   fill # N  SELL  px=..  qty=3.00 .. (partial)   <- same order id,"
@@ -92,13 +101,16 @@ demo-execution: require-bins
 	@echo "   (pos= is the *realized* net; the strategy caps *intended* exposure,"
 	@echo "    so realized can lag it across flips — a real reconciliation gap.)"
 	@echo "   Ctrl-C after ~15s."
+	@echo ""
+	@echo " Full per-stage logs (this run only): $(LOGDIR)/{exec,strat,exch}.log"
 	@echo "======================================================================"
-	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
+	@echo "  execution runs in the foreground (fills + P&L on screen AND in exec.log);"
+	@echo "  exchange + strategy log to their files. Ctrl-C stops execution and reaps them."
+	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange > $(LOGDIR)/exch.log 2>&1 & X=$$!; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.10 MAX_POSITION=50 ORDER_UNITS=5 COOLDOWN=8 ./target/release/strategy > $(LOGDIR)/strat.log 2>&1 & S=$$!; \
 	sleep 1; \
-	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.10 MAX_POSITION=50 ORDER_UNITS=5 COOLDOWN=8 ./target/release/strategy & S=$$!; \
-	sleep 1; \
-	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
-	kill $$S $$E 2>/dev/null || true
+	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution 2>&1 | tee $(LOGDIR)/exec.log; \
+	kill $$S $$X 2>/dev/null || true
 
 # TICK-TO-TRADE LATENCY: the three RDTSC windows. Watch the `LAT` lines:
 #   decision-only ~65ns  (the strategy math — my code)
@@ -107,19 +119,25 @@ demo-execution: require-bins
 #                         rest is cross-core cache-line visibility under sparse flow)
 demo-latency: require-bins
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
+	@rm -f $(LOGDIR)/*.log 2>/dev/null || true
+	@mkdir -p $(LOGDIR)
 	@echo "======================================================================"
 	@echo " TICK-TO-TRADE LATENCY DEMO — watch the three LAT windows:"
 	@echo "   LAT decision-only  ~65 ns   (strategy math, off the hot path)"
 	@echo "   LAT tick-to-order  ~900 ns  (decision + one iceoryx2 hop)"
 	@echo "   LAT tick-to-fill   ~80 us   (round-trip to the real matcher)"
 	@echo "   Ctrl-C after ~15s; they also print on shutdown."
+	@echo ""
+	@echo " Full per-stage logs (this run only): $(LOGDIR)/{exec,strat,exch}.log"
+	@echo "   decision-only + tick-to-order -> strat.log ; tick-to-fill -> exec.log"
 	@echo "======================================================================"
-	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
+	@echo "  strategy runs in the foreground (decision-only + tick-to-order LAT on screen"
+	@echo "  AND in strat.log); tick-to-fill is in exec.log. Ctrl-C stops it and reaps the rest."
+	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution > $(LOGDIR)/exec.log 2>&1 & E=$$!; \
+	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange > $(LOGDIR)/exch.log 2>&1 & X=$$!; \
 	sleep 1; \
-	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.12 MAX_POSITION=3 ./target/release/strategy & S=$$!; \
-	sleep 1; \
-	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
-	kill $$S $$E 2>/dev/null || true
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.12 MAX_POSITION=3 ./target/release/strategy 2>&1 | tee $(LOGDIR)/strat.log; \
+	kill $$E $$X 2>/dev/null || true
 
 # Visual strategy builder: control server + web UI on :8080, driving the real
 # pipeline with a live latency panel. `sudo make studio` for RT scheduling.

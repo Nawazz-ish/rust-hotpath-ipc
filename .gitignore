@@ -2,6 +2,10 @@
 /target/
 **/target/
 
+# Demo per-stage logs (written by `make demo-*`, one run at a time)
+/logs/
+*.log
+
 # Backtrace / profiling artifacts
 *.perf
 perf.data*
