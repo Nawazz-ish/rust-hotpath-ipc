@@ -62,18 +62,22 @@ pipeline: build
 # ORDER EXECUTION: multi-unit orders (ORDER_UNITS=5) sweep several book levels, so
 # a single order fills in pieces at worsening prices — a real partial fill against
 # a real order book. Watch the execution lines: `fill # N ... (partial)` where the
-# same order id fills twice at different px. MAX_POSITION scales with the size.
+# same order id fills twice at different px, and `pnl=` (mark-to-market P&L).
+# COOLDOWN=8 keeps orders flowing; MAX_POSITION is in units so it scales with size.
 demo-execution: build
 	@rm -rf /dev/shm/iox2* /tmp/iceoryx2 2>/dev/null || true
 	@echo "======================================================================"
 	@echo " ORDER-EXECUTION DEMO — watch the [exec] lines for PARTIAL FILLS:"
 	@echo "   fill # N  SELL  px=..  qty=3.00 .. (partial)   <- same order id,"
 	@echo "   fill # N  SELL  px=..  qty=2.00 ..             <- two prices = one"
-	@echo "   order swept two levels of the book. Ctrl-C after ~15s."
+	@echo "   order swept two levels of the book. pnl= is mark-to-market P&L."
+	@echo "   (pos= is the *realized* net; the strategy caps *intended* exposure,"
+	@echo "    so realized can lag it across flips — a real reconciliation gap.)"
+	@echo "   Ctrl-C after ~15s."
 	@echo "======================================================================"
 	CPU_CORE=$(EXEC_CORE) REPORTER_CORE=$(REPORTER_CORE) ./target/release/execution & E=$$!; \
 	sleep 1; \
-	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.12 MAX_POSITION=50 ORDER_UNITS=5 ./target/release/strategy & S=$$!; \
+	CPU_CORE=$(STRAT_CORE) REPORTER_CORE=$(REPORTER_CORE) THRESHOLD=0.10 MAX_POSITION=50 ORDER_UNITS=5 COOLDOWN=8 ./target/release/strategy & S=$$!; \
 	sleep 1; \
 	CPU_CORE=$(EXCH_CORE) TICK_US=$(TICK_US) ./target/release/exchange; \
 	kill $$S $$E 2>/dev/null || true
