@@ -1,6 +1,6 @@
 # rust-hotpath-ipc
 
-An extracted hot-path IPC subsystem from a proprietary crypto trading platform. It runs a full tick-to-trade loop across separate OS processes — a **matching engine** with a real limit order book, a **strategy** that reads ticks and emits orders, and an **execution** stage that books fills and P&L — all wired over **zero-copy shared-memory IPC** and instrumented with **RDTSC nanosecond latency measurement**. This repository is an anonymized slice of the production system: the message layout, the matching engine, the latency-measurement pipeline, and the real-time scheduling are intact; everything that touches persistence, accounting, or venue credentials has been deliberately left out (see [Architecture](#architecture)). It is a standalone, self-contained Rust crate.
+An extracted hot-path IPC subsystem from a proprietary crypto trading platform. It runs a full tick-to-trade loop across separate OS processes — a **mock exchange** with a real limit order book, a **strategy** that reads ticks and emits orders, and an **execution** stage that books fills and P&L — all wired over **zero-copy shared-memory IPC** and instrumented with **RDTSC nanosecond latency measurement**. This repository is an anonymized slice of the production system: the message layout, the matching engine, the latency-measurement pipeline, and the real-time scheduling are intact; everything that touches persistence, accounting, or venue credentials has been deliberately left out (see [Architecture](#architecture)). It is a standalone, self-contained Rust crate.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ The moving parts:
 - **Zero-copy IPC over shared memory.** Messages are published into and received from a lock-free shared-memory ring buffer. The payload is written once, in place, and read in place by the subscriber. Nothing is serialized, framed, or copied through a kernel socket buffer on the way across.
 - **RDTSC latency measurement with percentile aggregation.** Each message is timestamped with the CPU timestamp counter at send and at receive. On the receive thread the only work per message is one timestamp read and a push into a pre-allocated buffer; when a window fills, the buffer is handed to a separate reporter thread over a channel, and that thread does the sorting and printing. So the sort and the I/O never run on the pinned, real-time receive loop. Cycles are converted to nanoseconds using the crate's runtime-calibrated TSC frequency, not a hardcoded clock assumption. Results are reported as percentiles (min/p50/p99/p99.9/max), not an average, because the tail is what a trading path cares about.
 - **CPU core pinning and real-time scheduling.** Hot threads pin themselves to specific cores and, on Linux, raise themselves to `SCHED_FIFO` real-time priority, so the OS scheduler does not migrate them or preempt them mid-cycle.
-- **A real matching engine, not a loopback fill.** Orders match against a limit order book with price-time priority, partial fills, and queue position — see [The matching engine](#the-matching-engine).
+- **A mock exchange with a real matching engine, not a loopback fill.** Orders match against a limit order book with price-time priority, partial fills, and queue position — see [The mock exchange](#the-mock-exchange).
 
 ## Repository layout
 
@@ -45,7 +45,7 @@ src/
   latency_window.rs  the off-hot-path latency recorder (lock-free push, off-core aggregation)
   tsc_calibration.rs cycle <-> nanosecond calibration
   bin/
-    exchange.rs      pipeline stage 1: order-book matching engine + market source } the trading
+    exchange.rs      pipeline stage 1: mock exchange (order-book matcher + market)  } the trading
     strategy.rs      pipeline stage 2: signal -> risk -> OrderCommand              } system —
     execution.rs     pipeline stage 3: consumes fills, tracks position + P&L       } run all three
     control-server.rs serves the visual builder and launches the pipeline
@@ -85,9 +85,9 @@ Each of these is a trade-off, so here is the reasoning, not just the choice.
 
 **Core pinning and `SCHED_FIFO` — to make latency predictable, not just low.** A trading hot path cares about the tail more than the mean. The enemies of the tail are the scheduler migrating a thread to a cold core and an unrelated process preempting it mid-cycle. Pinning each thread to a dedicated core keeps its working set warm in that core's cache; `SCHED_FIFO` at high priority tells the kernel not to preempt it for ordinary work. Together they trade some of the machine's general-purpose fairness for a tighter, more predictable latency distribution — exactly the trade a trading system wants to make.
 
-## The matching engine
+## The mock exchange
 
-The `exchange` stage is a real **limit order book** — two price-sorted sides (`BTreeMap` of price levels), each a FIFO queue, so matching honours **price-time priority**. It lives in `src/order_book.rs` as a pure, unit-tested module with no IPC dependency; the binary wires it onto the bus and drives it.
+The `exchange` stage is a **mock exchange** — a simulated venue that runs *in process*, not a connection to a real market. But the matching inside it is real: a proper **limit order book** with two price-sorted sides (`BTreeMap` of price levels), each a FIFO queue, so matching honours **price-time priority**. The book lives in `src/order_book.rs` as a pure, unit-tested module with no IPC dependency; the `exchange` binary wires it onto the shared-memory bus, drives it with synthetic order flow, and reports fills back to the strategy.
 
 - A **marketable** order crosses the spread and fills against resting liquidity, walking several price levels for size — so a large order **partially fills** at worsening prices (real slippage). `sudo make demo-execution ORDER_UNITS=5` shows this: one order id filling in pieces at different prices.
 - A **passive** limit order (`PASSIVE=1`) rests and only fills once the queue ahead of it clears — so **queue position** is a real thing you can watch.
