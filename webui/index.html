@@ -13,8 +13,8 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     font: 13px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; }
-  #app { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: 44px 1fr;
-    grid-template-areas: "head head" "side console"; height: 100vh; }
+  #app { display: grid; grid-template-columns: 300px minmax(340px, 1fr) 1fr; grid-template-rows: 44px 1fr;
+    grid-template-areas: "head head head" "side graph console"; height: 100vh; }
   header { grid-area: head; display: flex; align-items: center; gap: 14px;
     padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
   header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
@@ -40,6 +40,37 @@
   .krow > span:first-child { color: var(--ink); }
   .krow input[type=range] { width: 150px; accent-color: var(--accent); }
   .krow .val { color: var(--accent); font-variant-numeric: tabular-nums; width: 44px; text-align: right; }
+
+  /* ---- read-only strategy graph panel ---- */
+  #graph { grid-area: graph; border-right: 1px solid var(--line); background:
+    radial-gradient(circle at 1px 1px, #1a2029 1px, transparent 0) 0 0 / 22px 22px, var(--bg);
+    display: flex; flex-direction: column; overflow: hidden; }
+  #graph .ghead { padding: 12px 16px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  #graph .ghead h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 0 0 4px; }
+  #graph .ghead .cap { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  #graphwrap { position: relative; flex: 1; min-height: 0; }
+  #gedges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #gedges path { fill: none; stroke: var(--line); stroke-width: 1.5; vector-effect: non-scaling-stroke;
+    transition: stroke .12s, stroke-width .12s; }
+  #gedges path.active { stroke-width: 3; }
+  #gedges path.buy.active { stroke: var(--green); }
+  #gedges path.sell.active { stroke: var(--red); }
+  #gedges path.trunk.active { stroke: var(--accent); }
+  .gnode { position: absolute; width: 120px; transform: translate(-50%, -50%);
+    background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--muted);
+    border-radius: 7px; padding: 7px 9px; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+    transition: box-shadow .12s, border-color .12s; pointer-events: none; }
+  .gnode .t { font-size: 12px; font-weight: 600; color: var(--ink); }
+  .gnode .s { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .gnode.src   { border-left-color: var(--accent); }
+  .gnode.ind   { border-left-color: #a371f7; }
+  .gnode.cond  { border-left-color: var(--amber); }
+  .gnode.buy   { border-left-color: var(--green); }
+  .gnode.sell  { border-left-color: var(--red); }
+  /* transient highlight */
+  .gnode.active.trunk { border-color: var(--accent); box-shadow: 0 0 12px rgba(47,129,247,.7); }
+  .gnode.active.hbuy  { border-color: var(--green);  box-shadow: 0 0 12px rgba(63,185,80,.75); }
+  .gnode.active.hsell { border-color: var(--red);    box-shadow: 0 0 12px rgba(248,81,73,.75); }
 
   #stats { display: flex; gap: 14px; }
   #stats .stat { flex: 1; }
@@ -125,6 +156,35 @@
     </div>
   </div>
 
+  <div id="graph">
+    <div class="ghead">
+      <h2>Strategy graph — read-only</h2>
+      <div class="cap">The composite strategy, as a node graph. The builder lets you wire nodes like these from scratch; shown here is one fixed graph — and it's what's running now. Each order lights the path it fired through.</div>
+    </div>
+    <div id="graphwrap">
+      <svg id="gedges" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <!-- data -> each indicator (trunk) -->
+        <path class="trunk" data-e="data-ema" d="M 20,50 C 34,50 34,22 46,22"></path>
+        <path class="trunk" data-e="data-mom" d="M 20,50 L 46,50"></path>
+        <path class="trunk" data-e="data-rev" d="M 20,50 C 34,50 34,78 46,78"></path>
+        <!-- each indicator -> threshold (trunk) -->
+        <path class="trunk" data-e="ema-thr" d="M 58,22 C 66,22 66,50 72,50"></path>
+        <path class="trunk" data-e="mom-thr" d="M 58,50 L 72,50"></path>
+        <path class="trunk" data-e="rev-thr" d="M 58,78 C 66,78 66,50 72,50"></path>
+        <!-- threshold -> buy / sell (branch) -->
+        <path class="buy"  data-e="thr-buy"  d="M 84,50 C 90,50 90,26 95,26"></path>
+        <path class="sell" data-e="thr-sell" d="M 84,50 C 90,50 90,74 95,74"></path>
+      </svg>
+      <div class="gnode src"  id="n-data" style="left:12%; top:50%"><div class="t">Market Data</div><div class="s">BTC/USDT ticks</div></div>
+      <div class="gnode ind"  id="n-ema"  style="left:52%; top:22%"><div class="t">EMA</div><div class="s">trend · 12 / 48</div></div>
+      <div class="gnode ind"  id="n-mom"  style="left:52%; top:50%"><div class="t">Momentum</div><div class="s">lookback 16</div></div>
+      <div class="gnode ind"  id="n-rev"  style="left:52%; top:78%"><div class="t">Mean Reversion</div><div class="s">window 64</div></div>
+      <div class="gnode cond" id="n-thr"  style="left:78%; top:50%"><div class="t">Blend → Threshold</div><div class="s">weighted · ±thr</div></div>
+      <div class="gnode buy"  id="n-buy"  style="left:95%; top:26%"><div class="t">Buy Signal</div><div class="s">score ≥ +thr</div></div>
+      <div class="gnode sell" id="n-sell" style="left:95%; top:74%"><div class="t">Sell Signal</div><div class="s">score ≤ −thr</div></div>
+    </div>
+  </div>
+
   <div id="console"><div class="empty">Press ▶ Run to launch the exchange → strategy → execution pipeline. Live orders, fills and P&amp;L stream here.</div></div>
 </div>
 
@@ -169,7 +229,40 @@ function line(text) {
   cons.appendChild(d);
   cons.scrollTop = cons.scrollHeight;
   while (cons.children.length > 400) cons.removeChild(cons.firstChild);
+  driveGraph(text);
   updateStats(text);
+}
+
+// ---------- read-only graph: light the path each order fires through ----------
+// The composite strategy evaluates the whole trunk (data -> the 3 indicators ->
+// threshold) every tick; only the terminal branch differs by side. So a [strat]
+// order line pulses the trunk, then lights the buy or sell branch. Best-effort
+// eye-candy over the real stream — if a line doesn't parse, nothing flashes.
+const TRUNK_NODES = ["n-data","n-ema","n-mom","n-rev","n-thr"];
+const TRUNK_EDGES = ["data-ema","data-mom","data-rev","ema-thr","mom-thr","rev-thr"];
+function edge(name){ return document.querySelector('#gedges path[data-e="'+name+'"]'); }
+function pulse(el, cls, ms){ if(!el) return; el.classList.add("active", cls);
+  setTimeout(() => el.classList.remove("active", cls), ms); }
+function highlightFlow(side){            // side: "buy" | "sell"
+  const ms = 620;
+  TRUNK_NODES.forEach(id => pulse(document.getElementById(id), "trunk", ms));
+  TRUNK_EDGES.forEach(e => pulse(edge(e), "trunk", ms));
+  if (side === "buy") {
+    pulse(document.getElementById("n-buy"), "hbuy", ms);
+    pulse(edge("thr-buy"), "buy", ms);
+  } else {
+    pulse(document.getElementById("n-sell"), "hsell", ms);
+    pulse(edge("thr-sell"), "sell", ms);
+  }
+}
+function driveGraph(text){
+  // Only strategy order lines drive the flow (one decision -> one pulse).
+  if (/\border #/.test(text)) {
+    if (/\bBUY\b/.test(text)) highlightFlow("buy");
+    else if (/\bSELL\b/.test(text)) highlightFlow("sell");
+  }
+  // The strategy's summary line means the finite run is done: stop + reset.
+  if (/strategy stopped:/.test(text)) onRunFinished();
 }
 
 // ---------- live stats + latency ----------
@@ -224,6 +317,22 @@ function setRunning(on) {
   statusT.textContent = on ? "running" : "stopped";
 }
 
+// Tear the pipeline down (button or auto-finish) and reset the UI to stopped.
+let finishing = false;
+async function stopPipeline(reason) {
+  if (finishing) return;
+  finishing = true;
+  stopBtn.disabled = true;
+  if (reason) line("[control] " + reason);
+  try { await fetch("/stop", { method: "POST" }); } catch (_) {}
+  setRunning(false);
+  finishing = false;
+}
+// The strategy hit its finite order bound — wind the whole run down cleanly.
+function onRunFinished() {
+  if (runBtn.disabled) stopPipeline("run complete — pipeline stopped.");
+}
+
 // ---------- SSE (with a single, resilient connection) ----------
 let es = null;
 function connectSSE() {
@@ -257,12 +366,7 @@ runBtn.onclick = async () => {
     setRunning(false);
   }
 };
-stopBtn.onclick = async () => {
-  stopBtn.disabled = true;
-  line("[control] stopping…");
-  try { await fetch("/stop", { method: "POST" }); } catch (_) {}
-  setRunning(false);
-};
+stopBtn.onclick = () => stopPipeline("stopping…");
 </script>
 </body>
 </html>

@@ -29,6 +29,11 @@ use tiny_http::{Header, Method, Response, Server};
 
 const PORT: u16 = 8080;
 
+/// A studio run is finite: the strategy stops after this many orders (and the UI
+/// tears the pipeline down when it sees the strategy's summary line). Keeps a live
+/// demo bounded and deterministic instead of streaming forever.
+const STUDIO_ORDERS: u64 = 300;
+
 fn main() {
     let bind = format!("0.0.0.0:{PORT}");
     let server = Server::http(&bind).expect("failed to bind control server");
@@ -288,7 +293,17 @@ fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, S
     // Consumers first so they're attached before the exchange starts producing:
     // execution (core 3), then strategy (core 2), then the exchange (core 1),
     // which matches orders and is the market-data source.
-    let execution = spawn_stage(&exe("execution"), &[("CPU_CORE", "3".into())], "exec", &hub)?;
+    let execution = spawn_stage(
+        &exe("execution"),
+        &[
+            ("CPU_CORE", "3".into()),
+            // Self-exit after the strategy's bounded order count is filled, so the
+            // whole finite run winds down on its own.
+            ("MAX_FILLS", format!("{STUDIO_ORDERS}")),
+        ],
+        "exec",
+        &hub,
+    )?;
     thread::sleep(std::time::Duration::from_millis(400));
 
     let strat_env: Vec<(&str, String)> = vec![
@@ -298,6 +313,8 @@ fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, S
         ("WEIGHT_MOMENTUM", format!("{}", p.weight_momentum)),
         ("WEIGHT_REVERSION", format!("{}", p.weight_reversion)),
         ("MAX_POSITION", format!("{}", p.max_position)),
+        // A studio run is finite — stop after STUDIO_ORDERS orders.
+        ("MAX_ORDERS", format!("{STUDIO_ORDERS}")),
     ];
     let strategy = spawn_stage(&exe("strategy"), &strat_env, "strat", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
