@@ -1,0 +1,41 @@
+{
+  "name": "Rule-based (AND / OR gates)",
+  "canvas": {
+    "nodes": [
+      { "id": "data",    "type": "data_source", "properties": {} },
+
+      { "id": "mom",     "type": "momentum",  "properties": { "lookback": 16 } },
+      { "id": "ema",     "type": "ema",       "properties": { "period": 24 } },
+      { "id": "rev",     "type": "reversion", "properties": { "window": 64 } },
+
+      { "id": "mom_up",  "type": "condition", "properties": { "op": "greater_than", "value": 0.10 } },
+      { "id": "ema_up",  "type": "condition", "properties": { "op": "greater_than", "value": 0.00 } },
+      { "id": "rev_os",  "type": "condition", "properties": { "op": "less_than",    "value": -0.50 } },
+      { "id": "mom_dn",  "type": "condition", "properties": { "op": "less_than",    "value": -0.10 } },
+
+      { "id": "buy_and", "type": "and_gate",  "properties": {} },
+      { "id": "sell_or", "type": "or_gate",   "properties": {} },
+
+      { "id": "buy",     "type": "buy_signal",  "properties": {} },
+      { "id": "sell",    "type": "sell_signal", "properties": {} }
+    ],
+    "connections": [
+      { "from": "data",   "to": "mom" },
+      { "from": "data",   "to": "ema" },
+      { "from": "data",   "to": "rev" },
+
+      { "from": "mom",    "to": "mom_up" },
+      { "from": "ema",    "to": "ema_up" },
+      { "from": "rev",    "to": "rev_os" },
+      { "from": "mom",    "to": "mom_dn" },
+
+      { "from": "mom_up", "to": "buy_and" },
+      { "from": "ema_up", "to": "buy_and" },
+      { "from": "buy_and","to": "buy" },
+
+      { "from": "rev_os", "to": "sell_or" },
+      { "from": "mom_dn", "to": "sell_or" },
+      { "from": "sell_or","to": "sell" }
+    ]
+  }
+}

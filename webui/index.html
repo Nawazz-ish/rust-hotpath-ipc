@@ -46,19 +46,26 @@
     radial-gradient(circle at 1px 1px, #1a2029 1px, transparent 0) 0 0 / 22px 22px, var(--bg);
     display: flex; flex-direction: column; overflow: hidden; }
   #graph .ghead { padding: 12px 16px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
-  #graph .ghead h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 0 0 4px; }
+  #graph .ghead .grow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+  #graph .ghead h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 0; }
   #graph .ghead .cap { font-size: 11px; color: var(--muted); line-height: 1.4; }
-  #graphwrap { position: relative; flex: 1; min-height: 0; }
-  #gedges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  #gedges path { fill: none; stroke: var(--line); stroke-width: 1.5; vector-effect: non-scaling-stroke;
+  .gtoggle { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .gtoggle button { background: var(--panel2); color: var(--muted); border: none; border-radius: 0;
+    padding: 4px 10px; font-size: 11px; cursor: pointer; }
+  .gtoggle button + button { border-left: 1px solid var(--line); }
+  .gtoggle button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .gview { position: absolute; inset: 0; }
+  #graphwrap, #graphwrap-gates { position: relative; flex: 1; min-height: 0; }
+  .gedges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .gedges path { fill: none; stroke: var(--line); stroke-width: 1.5; vector-effect: non-scaling-stroke;
     transition: stroke .12s, stroke-width .12s; }
-  #gedges path.active { stroke-width: 3; }
-  #gedges path.buy.active { stroke: var(--green); }
-  #gedges path.sell.active { stroke: var(--red); }
-  #gedges path.trunk.active { stroke: var(--accent); }
-  .gnode { position: absolute; width: 120px; transform: translate(-50%, -50%);
+  .gedges path.active { stroke-width: 3; }
+  .gedges path.buy.active { stroke: var(--green); }
+  .gedges path.sell.active { stroke: var(--red); }
+  .gedges path.trunk.active { stroke: var(--accent); }
+  .gnode { position: absolute; width: 118px; transform: translate(-50%, -50%);
     background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--muted);
-    border-radius: 7px; padding: 7px 9px; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+    border-radius: 7px; padding: 6px 9px; box-shadow: 0 2px 8px rgba(0,0,0,.35);
     transition: box-shadow .12s, border-color .12s; pointer-events: none; }
   .gnode .t { font-size: 12px; font-weight: 600; color: var(--ink); }
   .gnode .s { font-size: 10px; color: var(--muted); margin-top: 1px; }
@@ -67,6 +74,14 @@
   .gnode.cond  { border-left-color: var(--amber); }
   .gnode.buy   { border-left-color: var(--green); }
   .gnode.sell  { border-left-color: var(--red); }
+  /* logic-gate node: compact, centered, distinct look */
+  .gnode.gate { width: 58px; text-align: center; border: 1px solid #56d364; border-left-width: 1px;
+    background: #10241a; border-radius: 20px; padding: 6px 6px; }
+  .gnode.gate .t { color: #7ee787; letter-spacing: 1px; }
+  /* gate-graph nodes are denser — tighten them */
+  #graphwrap-gates .gnode { width: 104px; padding: 5px 8px; }
+  #graphwrap-gates .gnode .t { font-size: 11px; }
+  #graphwrap-gates .gnode.gate { width: 52px; }
   /* transient highlight */
   .gnode.active.trunk { border-color: var(--accent); box-shadow: 0 0 12px rgba(47,129,247,.7); }
   .gnode.active.hbuy  { border-color: var(--green);  box-shadow: 0 0 12px rgba(63,185,80,.75); }
@@ -158,20 +173,25 @@
 
   <div id="graph">
     <div class="ghead">
-      <h2>Strategy graph — read-only</h2>
-      <div class="cap">The composite strategy, as a node graph. The builder lets you wire nodes like these from scratch; shown here is one fixed graph — and it's what's running now. Each order lights the path it fired through.</div>
+      <div class="grow">
+        <h2>Strategy graph — read-only</h2>
+        <div class="gtoggle">
+          <button id="mode-composite" class="on">Composite (blend)</button>
+          <button id="mode-gates">Gate logic (AND / OR)</button>
+        </div>
+      </div>
+      <div class="cap" id="gcap">The composite strategy, as a node graph. The builder lets you wire nodes like these from scratch; shown here is one fixed graph — and it's what's running now. Each order lights the path it fired through.</div>
     </div>
-    <div id="graphwrap">
-      <svg id="gedges" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <!-- data -> each indicator (trunk) -->
+
+    <!-- COMPOSITE graph (default) -->
+    <div id="graphwrap" class="gview">
+      <svg class="gedges" viewBox="0 0 100 100" preserveAspectRatio="none">
         <path class="trunk" data-e="data-ema" d="M 20,50 C 34,50 34,22 46,22"></path>
         <path class="trunk" data-e="data-mom" d="M 20,50 L 46,50"></path>
         <path class="trunk" data-e="data-rev" d="M 20,50 C 34,50 34,78 46,78"></path>
-        <!-- each indicator -> threshold (trunk) -->
         <path class="trunk" data-e="ema-thr" d="M 58,22 C 66,22 66,50 72,50"></path>
         <path class="trunk" data-e="mom-thr" d="M 58,50 L 72,50"></path>
         <path class="trunk" data-e="rev-thr" d="M 58,78 C 66,78 66,50 72,50"></path>
-        <!-- threshold -> buy / sell (branch) -->
         <path class="buy"  data-e="thr-buy"  d="M 84,50 C 90,50 90,26 95,26"></path>
         <path class="sell" data-e="thr-sell" d="M 84,50 C 90,50 90,74 95,74"></path>
       </svg>
@@ -182,6 +202,43 @@
       <div class="gnode cond" id="n-thr"  style="left:78%; top:50%"><div class="t">Blend → Threshold</div><div class="s">weighted · ±thr</div></div>
       <div class="gnode buy"  id="n-buy"  style="left:95%; top:26%"><div class="t">Buy Signal</div><div class="s">score ≥ +thr</div></div>
       <div class="gnode sell" id="n-sell" style="left:95%; top:74%"><div class="t">Sell Signal</div><div class="s">score ≤ −thr</div></div>
+    </div>
+
+    <!-- GATE graph (boolean AND/OR; hidden until toggled) -->
+    <div id="graphwrap-gates" class="gview" style="display:none">
+      <svg class="gedges" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <!-- data -> indicators -->
+        <path class="trunk" data-e="g-data-mom" d="M 15,50 C 26,50 26,20 34,20"></path>
+        <path class="trunk" data-e="g-data-ema" d="M 15,50 C 26,50 26,42 34,42"></path>
+        <path class="trunk" data-e="g-data-rev" d="M 15,50 C 26,50 26,66 34,66"></path>
+        <path class="trunk" data-e="g-data-md"  d="M 15,50 C 26,50 26,88 34,88"></path>
+        <!-- indicators -> conditions -->
+        <path class="trunk" data-e="g-mom-cu"  d="M 46,20 L 56,20"></path>
+        <path class="trunk" data-e="g-ema-ce"  d="M 46,42 L 56,42"></path>
+        <path class="trunk" data-e="g-rev-cr"  d="M 46,66 L 56,66"></path>
+        <path class="trunk" data-e="g-md-cd"   d="M 46,88 L 56,88"></path>
+        <!-- conditions -> gates (buy: AND of mom>.1 & ema>0 ; sell: OR of rev<-.5 | mom<-.1) -->
+        <path class="buy"  data-e="g-cu-and"  d="M 68,20 C 73,20 73,30 76,30"></path>
+        <path class="buy"  data-e="g-ce-and"  d="M 68,42 C 73,42 73,30 76,30"></path>
+        <path class="sell" data-e="g-cr-or"   d="M 68,66 C 73,66 73,72 76,72"></path>
+        <path class="sell" data-e="g-cd-or"   d="M 68,88 C 73,88 73,72 76,72"></path>
+        <!-- gates -> signals -->
+        <path class="buy"  data-e="g-and-buy" d="M 84,30 L 90,30"></path>
+        <path class="sell" data-e="g-or-sell" d="M 84,72 L 90,72"></path>
+      </svg>
+      <div class="gnode src"  id="g-data" style="left:9%;  top:50%"><div class="t">Market Data</div><div class="s">BTC/USDT ticks</div></div>
+      <div class="gnode ind"  id="g-mom"  style="left:40%; top:20%"><div class="t">Momentum</div><div class="s">lookback 16</div></div>
+      <div class="gnode ind"  id="g-ema"  style="left:40%; top:42%"><div class="t">EMA</div><div class="s">trend · 24</div></div>
+      <div class="gnode ind"  id="g-rev"  style="left:40%; top:66%"><div class="t">Mean Reversion</div><div class="s">window 64</div></div>
+      <div class="gnode ind"  id="g-md"   style="left:40%; top:88%"><div class="t">Momentum</div><div class="s">lookback 16</div></div>
+      <div class="gnode cond" id="g-cu"   style="left:62%; top:20%"><div class="t">mom &gt; 0.10</div><div class="s">GT</div></div>
+      <div class="gnode cond" id="g-ce"   style="left:62%; top:42%"><div class="t">ema &gt; 0.00</div><div class="s">GT</div></div>
+      <div class="gnode cond" id="g-cr"   style="left:62%; top:66%"><div class="t">rev &lt; −0.50</div><div class="s">LT</div></div>
+      <div class="gnode cond" id="g-cd"   style="left:62%; top:88%"><div class="t">mom &lt; −0.10</div><div class="s">LT</div></div>
+      <div class="gnode gate" id="g-and"  style="left:80%; top:30%"><div class="t">AND</div></div>
+      <div class="gnode gate" id="g-or"   style="left:80%; top:72%"><div class="t">OR</div></div>
+      <div class="gnode buy"  id="g-buy"  style="left:93%; top:30%"><div class="t">Buy</div></div>
+      <div class="gnode sell" id="g-sell" style="left:93%; top:72%"><div class="t">Sell</div></div>
     </div>
   </div>
 
@@ -199,6 +256,9 @@ sliders.forEach(([id,vid,dp]) => {
   const upd = () => v.textContent = parseFloat(s.value).toFixed(dp);
   s.addEventListener("input", upd); upd();
 });
+// Which strategy to run: "composite" (blend, sliders matter) or "gates" (AND/OR
+// bytecode graph). Set by the graph-panel toggle.
+let strategyMode = "composite";
 function params() {
   return {
     weight_trend: +document.getElementById("w_trend").value,
@@ -208,6 +268,7 @@ function params() {
     max_position: +document.getElementById("maxpos").value,
     vol: +document.getElementById("vol").value,
     tick_us: 40,
+    strategy: strategyMode,          // "composite" | "gates"
   };
 }
 
@@ -216,6 +277,9 @@ const cons = document.getElementById("console");
 let consoleCleared = false;
 function line(text) {
   if (!consoleCleared) { cons.innerHTML = ""; consoleCleared = true; }
+  // Sticky scroll: only auto-follow to the bottom if the user is already there,
+  // so scrolling up to read the opening lines isn't yanked back down.
+  const atBottom = cons.scrollHeight - cons.scrollTop - cons.clientHeight < 40;
   const d = document.createElement("div");
   d.className = "ln";
   if (text.includes("[exch]")) d.classList.add("exch");
@@ -227,33 +291,49 @@ function line(text) {
   if (/pnl=|P&L/.test(text)) d.classList.add("pnl");
   d.textContent = text;
   cons.appendChild(d);
-  cons.scrollTop = cons.scrollHeight;
-  while (cons.children.length > 400) cons.removeChild(cons.firstChild);
+  if (atBottom) cons.scrollTop = cons.scrollHeight;
+  while (cons.children.length > 1500) cons.removeChild(cons.firstChild);
   driveGraph(text);
   updateStats(text);
 }
 
 // ---------- read-only graph: light the path each order fires through ----------
-// The composite strategy evaluates the whole trunk (data -> the 3 indicators ->
-// threshold) every tick; only the terminal branch differs by side. So a [strat]
-// order line pulses the trunk, then lights the buy or sell branch. Best-effort
-// eye-candy over the real stream — if a line doesn't parse, nothing flashes.
-const TRUNK_NODES = ["n-data","n-ema","n-mom","n-rev","n-thr"];
-const TRUNK_EDGES = ["data-ema","data-mom","data-rev","ema-thr","mom-thr","rev-thr"];
-function edge(name){ return document.querySelector('#gedges path[data-e="'+name+'"]'); }
+// Each strategy graph has a shared "trunk" (evaluated every order) plus a buy and
+// a sell branch. A [strat] order line pulses the trunk and the branch for its
+// side. Best-effort eye-candy over the real stream — if a line doesn't parse,
+// nothing flashes. The maps below select the right graph by strategyMode.
+const GRAPHS = {
+  composite: {
+    wrap: "#graphwrap",
+    trunkN: ["n-data","n-ema","n-mom","n-rev","n-thr"],
+    trunkE: ["data-ema","data-mom","data-rev","ema-thr","mom-thr","rev-thr"],
+    buyN:  ["n-buy"],  buyE:  ["thr-buy"],
+    sellN: ["n-sell"], sellE: ["thr-sell"],
+  },
+  gates: {
+    wrap: "#graphwrap-gates",
+    // trunk = data + the two indicators feeding the BUY-AND + their conditions +
+    // the AND gate for buys / OR gate for sells; we pulse the full data->cond span
+    // as the trunk and light the gate + terminal per side.
+    trunkN: ["g-data","g-mom","g-ema","g-rev","g-md","g-cu","g-ce","g-cr","g-cd"],
+    trunkE: ["g-data-mom","g-data-ema","g-data-rev","g-data-md","g-mom-cu","g-ema-ce","g-rev-cr","g-md-cd"],
+    buyN:  ["g-and","g-buy"],  buyE:  ["g-cu-and","g-ce-and","g-and-buy"],
+    sellN: ["g-or","g-sell"],  sellE: ["g-cr-or","g-cd-or","g-or-sell"],
+  },
+};
+function edge(wrap, name){ return document.querySelector(wrap+' path[data-e="'+name+'"]'); }
 function pulse(el, cls, ms){ if(!el) return; el.classList.add("active", cls);
   setTimeout(() => el.classList.remove("active", cls), ms); }
 function highlightFlow(side){            // side: "buy" | "sell"
-  const ms = 620;
-  TRUNK_NODES.forEach(id => pulse(document.getElementById(id), "trunk", ms));
-  TRUNK_EDGES.forEach(e => pulse(edge(e), "trunk", ms));
-  if (side === "buy") {
-    pulse(document.getElementById("n-buy"), "hbuy", ms);
-    pulse(edge("thr-buy"), "buy", ms);
-  } else {
-    pulse(document.getElementById("n-sell"), "hsell", ms);
-    pulse(edge("thr-sell"), "sell", ms);
-  }
+  const ms = 620, g = GRAPHS[strategyMode] || GRAPHS.composite;
+  g.trunkN.forEach(id => pulse(document.getElementById(id), "trunk", ms));
+  g.trunkE.forEach(e => pulse(edge(g.wrap, e), "trunk", ms));
+  const nodes = side === "buy" ? g.buyN : g.sellN;
+  const edges = side === "buy" ? g.buyE : g.sellE;
+  const ncls = side === "buy" ? "hbuy" : "hsell";
+  const ecls = side === "buy" ? "buy" : "sell";
+  nodes.forEach(id => pulse(document.getElementById(id), ncls, ms));
+  edges.forEach(e => pulse(edge(g.wrap, e), ecls, ms));
 }
 function driveGraph(text){
   // Only strategy order lines drive the flow (one decision -> one pulse).
@@ -332,6 +412,27 @@ async function stopPipeline(reason) {
 function onRunFinished() {
   if (runBtn.disabled) stopPipeline("run complete — pipeline stopped.");
 }
+
+// ---------- strategy mode toggle (composite blend | AND/OR gates) ----------
+const modeComposite = document.getElementById("mode-composite");
+const modeGates = document.getElementById("mode-gates");
+const wrapComposite = document.getElementById("graphwrap");
+const wrapGates = document.getElementById("graphwrap-gates");
+const gcap = document.getElementById("gcap");
+const CAP_COMPOSITE = "The composite strategy, as a node graph. The builder lets you wire nodes like these from scratch; shown here is one fixed graph — and it's what's running now. Each order lights the path it fired through.";
+const CAP_GATES = "A rule-based strategy: boolean conditions combined with AND / OR gates. This one compiles to real AND/OR bytecode and is what runs when you press Run in this mode. Each order lights the branch it fired.";
+function setMode(mode){
+  if (runBtn.disabled) return;            // don't switch mid-run
+  strategyMode = mode;
+  const gates = mode === "gates";
+  modeGates.classList.toggle("on", gates);
+  modeComposite.classList.toggle("on", !gates);
+  wrapGates.style.display = gates ? "" : "none";
+  wrapComposite.style.display = gates ? "none" : "";
+  gcap.textContent = gates ? CAP_GATES : CAP_COMPOSITE;
+}
+modeComposite.onclick = () => setMode("composite");
+modeGates.onclick = () => setMode("gates");
 
 // ---------- SSE (with a single, resilient connection) ----------
 let es = null;

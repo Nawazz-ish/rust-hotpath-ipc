@@ -593,6 +593,39 @@ mod tests {
     }
 
     #[test]
+    fn gate_strategy_compiles_and_or_together() {
+        // The studio's "gate logic" strategy shape: a buy path folded by AND and a
+        // sell path folded by OR in one program (see examples/gates.json). Assert
+        // both gate opcodes are emitted so the AND/OR demo is genuinely compiled.
+        let json = r#"{"canvas":{"nodes":[
+            {"id":"d","type":"data_source","properties":{}},
+            {"id":"m","type":"momentum","properties":{"lookback":16}},
+            {"id":"e","type":"ema","properties":{"period":24}},
+            {"id":"cm","type":"condition","properties":{"op":"greater_than","value":0.1}},
+            {"id":"ce","type":"condition","properties":{"op":"greater_than","value":0.0}},
+            {"id":"and","type":"and_gate","properties":{}},
+            {"id":"b","type":"buy_signal","properties":{}},
+            {"id":"r","type":"reversion","properties":{"window":64}},
+            {"id":"cr","type":"condition","properties":{"op":"less_than","value":-0.5}},
+            {"id":"md","type":"momentum","properties":{"lookback":16}},
+            {"id":"cd","type":"condition","properties":{"op":"less_than","value":-0.1}},
+            {"id":"or","type":"or_gate","properties":{}},
+            {"id":"s","type":"sell_signal","properties":{}}
+        ],"connections":[
+            {"from":"d","to":"m"},{"from":"m","to":"cm"},
+            {"from":"d","to":"e"},{"from":"e","to":"ce"},
+            {"from":"cm","to":"and"},{"from":"ce","to":"and"},{"from":"and","to":"b"},
+            {"from":"d","to":"r"},{"from":"r","to":"cr"},
+            {"from":"d","to":"md"},{"from":"md","to":"cd"},
+            {"from":"cr","to":"or"},{"from":"cd","to":"or"},{"from":"or","to":"s"}
+        ]}}"#;
+        let prog = compile(&parse(json).unwrap()).unwrap();
+        assert!(prog.contains(&Op::And), "buy path must fold with AND");
+        assert!(prog.contains(&Op::Or), "sell path must fold with OR");
+        assert!(prog.contains(&Op::Buy) && prog.contains(&Op::Sell));
+    }
+
+    #[test]
     fn ambiguous_condition_is_rejected_not_dropped() {
         // Two indicators wired straight into one condition is ambiguous — this
         // must error, NOT silently drop one input.

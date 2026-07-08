@@ -196,6 +196,10 @@ struct StrategyParams {
     max_position: i64,
     vol: f64,
     tick_us: u64,
+    // When true, run the boolean AND/OR *gate* graph (examples/gates.json) via the
+    // bytecode VM instead of the composite blend. The sliders above only affect the
+    // composite; the gate strategy is a fixed rule set compiled from the graph.
+    gates: bool,
 }
 
 impl Default for StrategyParams {
@@ -208,6 +212,7 @@ impl Default for StrategyParams {
             max_position: 3,
             vol: 8.0,
             tick_us: 40,
+            gates: false,
         }
     }
 }
@@ -248,20 +253,29 @@ impl StrategyParams {
         if let Some(v) = get("tick_us") {
             p.tick_us = v as u64;
         }
+        // Gate mode: the browser sends "strategy":"gates" to run the AND/OR graph.
+        p.gates = body.contains("\"gates\"");
         p
     }
 
     fn describe(&self) -> String {
-        format!(
-            "trend={:.2} mom={:.2} rev={:.2} thr={:.2} maxpos={} vol={:.1} tick={}us",
-            self.weight_trend,
-            self.weight_momentum,
-            self.weight_reversion,
-            self.threshold,
-            self.max_position,
-            self.vol,
-            self.tick_us
-        )
+        if self.gates {
+            format!(
+                "gate strategy (AND/OR bytecode) maxpos={} vol={:.1} tick={}us",
+                self.max_position, self.vol, self.tick_us
+            )
+        } else {
+            format!(
+                "composite trend={:.2} mom={:.2} rev={:.2} thr={:.2} maxpos={} vol={:.1} tick={}us",
+                self.weight_trend,
+                self.weight_momentum,
+                self.weight_reversion,
+                self.threshold,
+                self.max_position,
+                self.vol,
+                self.tick_us
+            )
+        }
     }
 }
 
@@ -306,7 +320,7 @@ fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, S
     )?;
     thread::sleep(std::time::Duration::from_millis(400));
 
-    let strat_env: Vec<(&str, String)> = vec![
+    let mut strat_env: Vec<(&str, String)> = vec![
         ("CPU_CORE", "2".into()),
         ("THRESHOLD", format!("{}", p.threshold)),
         ("WEIGHT_TREND", format!("{}", p.weight_trend)),
@@ -316,6 +330,21 @@ fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, S
         // A studio run is finite — stop after STUDIO_ORDERS orders.
         ("MAX_ORDERS", format!("{STUDIO_ORDERS}")),
     ];
+    // Gate mode: point the strategy at the AND/OR graph so it compiles it to
+    // bytecode and runs THAT (via STRATEGY_JSON) instead of the composite blend.
+    if p.gates {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let candidates = [
+            "examples/gates.json".to_string(),
+            "./examples/gates.json".to_string(),
+            format!("{manifest}/examples/gates.json"),
+        ];
+        let graph = candidates
+            .into_iter()
+            .find(|c| std::path::Path::new(c).exists())
+            .unwrap_or_else(|| format!("{manifest}/examples/gates.json"));
+        strat_env.push(("STRATEGY_JSON", graph));
+    }
     let strategy = spawn_stage(&exe("strategy"), &strat_env, "strat", &hub)?;
     thread::sleep(std::time::Duration::from_millis(400));
 
