@@ -143,6 +143,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -> identical output), self-terminating, and produces a fixed-size log.
     let max_orders: u64 = env_or("MAX_ORDERS", 0);
 
+    // Wall-clock safety bound: stop after this many seconds regardless of how many
+    // orders were sent. 0 (default) disables it. The studio sets this so a run
+    // ALWAYS terminates even under a slider combo that trades rarely (e.g. a very
+    // high threshold, or all weights near zero) and would otherwise never reach
+    // MAX_ORDERS. Checked off the hot path (in the periodic heartbeat), so it costs
+    // nothing per tick.
+    let max_seconds: u64 = env_or("MAX_SECONDS", 0);
+    let start = std::time::Instant::now();
+
     // Order size in whole units. The default 1.0 fills whole against a single
     // maker; sizing up past a typical resting level makes the order sweep several
     // price levels, so the exchange returns partial fills — worth setting when you
@@ -255,13 +264,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let price = tick.price as f64 / 100_000_000.0;
 
         // Periodic heartbeat so the demo shows the strategy is alive and what
-        // the signals look like even during quiet stretches.
+        // the signals look like even during quiet stretches. Also the cheap place
+        // to enforce the wall-clock safety bound (no syscall on the per-tick path).
         if ticks_seen.is_multiple_of(50_000) {
             let (trend, mom, rev) = strat.signals();
             println!(
                 "  .. {} ticks, px={:.2}  signals[trend={:+.2} mom={:+.2} rev={:+.2}]  orders={}",
                 ticks_seen, price, trend, mom, rev, orders_sent
             );
+            if max_seconds != 0 && start.elapsed().as_secs() >= max_seconds {
+                println!("  .. reached the {max_seconds}s time cap; stopping.");
+                running.store(false, Ordering::SeqCst);
+            }
         }
 
         // Decision, timed in isolation. Serialized reads (rdtscp) bracket the

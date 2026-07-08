@@ -36,6 +36,11 @@
   #side .sec { padding: 14px 16px; border-bottom: 1px solid var(--line); }
   #side h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 0 0 10px; }
   #side .hint { color: var(--muted); font-size: 11px; margin: -4px 0 12px; line-height: 1.4; }
+  #side .secrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  #side .secrow h2 { margin: 0; }
+  button.mini { background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+    border-radius: 5px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+  button.mini:hover { border-color: var(--accent); color: var(--ink); }
   .krow { display: flex; justify-content: space-between; align-items: center; margin: 9px 0; font-size: 12px; }
   .krow > span:first-child { color: var(--ink); }
   .krow input[type=range] { width: 150px; accent-color: var(--accent); }
@@ -136,8 +141,8 @@
 
   <div id="side">
     <div class="sec">
-      <h2>Strategy parameters</h2>
-      <div class="hint">These sliders set the composite strategy's signal weights, decision threshold and risk cap. Changing them and pressing Run re-launches the real pipeline with those knobs — nothing here is a mock.</div>
+      <div class="secrow"><h2>Strategy parameters</h2><button id="resetBtn" class="mini">↺ Reset</button></div>
+      <div class="hint">These sliders set the composite strategy's signal weights, decision threshold and risk cap. Changing them and pressing Run re-launches the real pipeline with those knobs — nothing here is a mock. <b>Reset</b> restores the demo defaults.</div>
       <div class="krow"><span>Trend weight</span><input id="w_trend" type="range" min="0" max="1" step="0.05" value="0.5"><span class="val" id="w_trend_v">0.50</span></div>
       <div class="krow"><span>Momentum weight</span><input id="w_mom" type="range" min="0" max="1" step="0.05" value="0.3"><span class="val" id="w_mom_v">0.30</span></div>
       <div class="krow"><span>Reversion weight</span><input id="w_rev" type="range" min="0" max="1" step="0.05" value="0.2"><span class="val" id="w_rev_v">0.20</span></div>
@@ -256,6 +261,18 @@ sliders.forEach(([id,vid,dp]) => {
   const upd = () => v.textContent = parseFloat(s.value).toFixed(dp);
   s.addEventListener("input", upd); upd();
 });
+// The demo defaults — one click restores a known-good, reliably-trading config.
+const DEFAULTS = { w_trend: 0.5, w_mom: 0.3, w_rev: 0.2, thr: 0.25, maxpos: 3, vol: 8 };
+function resetDefaults() {
+  for (const [id, val] of Object.entries(DEFAULTS)) {
+    const s = document.getElementById(id);
+    s.value = val;
+    s.dispatchEvent(new Event("input"));   // refresh its value label
+  }
+  setMode("composite");                     // back to the blend graph too
+  line("[control] parameters reset to demo defaults.");
+}
+document.getElementById("resetBtn").onclick = resetDefaults;
 // Which strategy to run: "composite" (blend, sliders matter) or "gates" (AND/OR
 // bytecode graph). Set by the graph-panel toggle.
 let strategyMode = "composite";

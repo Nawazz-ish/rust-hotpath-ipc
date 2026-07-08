@@ -34,6 +34,11 @@ const PORT: u16 = 8080;
 /// demo bounded and deterministic instead of streaming forever.
 const STUDIO_ORDERS: u64 = 300;
 
+/// Wall-clock safety cap for a studio run: even if a slider combo makes the
+/// strategy trade rarely (and it never reaches STUDIO_ORDERS), the run still ends
+/// after this many seconds so the UI never hangs "running" forever.
+const STUDIO_MAX_SECONDS: u64 = 30;
+
 fn main() {
     let bind = format!("0.0.0.0:{PORT}");
     let server = Server::http(&bind).expect("failed to bind control server");
@@ -334,8 +339,11 @@ fn launch(p: &StrategyParams, hub: Arc<Mutex<Hub>>) -> Result<RunningPipeline, S
         ("WEIGHT_MOMENTUM", format!("{}", p.weight_momentum)),
         ("WEIGHT_REVERSION", format!("{}", p.weight_reversion)),
         ("MAX_POSITION", format!("{}", p.max_position)),
-        // A studio run is finite — stop after STUDIO_ORDERS orders.
+        // A studio run is finite — stop after STUDIO_ORDERS orders, or after
+        // STUDIO_MAX_SECONDS as a backstop if the config trades too rarely to
+        // reach that many orders.
         ("MAX_ORDERS", format!("{STUDIO_ORDERS}")),
+        ("MAX_SECONDS", format!("{STUDIO_MAX_SECONDS}")),
     ];
     // Gate mode: point the strategy at the AND/OR graph so it compiles it to
     // bytecode and runs THAT (via STRATEGY_JSON) instead of the composite blend.
