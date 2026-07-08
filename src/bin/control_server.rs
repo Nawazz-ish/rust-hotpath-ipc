@@ -112,9 +112,16 @@ fn serve_index(request: tiny_http::Request) {
         }
     }
     let body = body.unwrap_or_else(|| "<h1>webui/index.html not found</h1>".to_string());
-    let header =
+    let ctype =
         Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
-    let _ = request.respond(Response::from_string(body).with_header(header));
+    // Never let the browser cache the page — a redeploy should always be picked up
+    // on refresh, so the UI can't get stuck on a stale version.
+    let nocache = Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap();
+    let _ = request.respond(
+        Response::from_string(body)
+            .with_header(ctype)
+            .with_header(nocache),
+    );
 }
 
 /// SSE endpoint: register a subscriber and stream lines until the client leaves.

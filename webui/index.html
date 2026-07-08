@@ -422,7 +422,9 @@ const gcap = document.getElementById("gcap");
 const CAP_COMPOSITE = "The composite strategy, as a node graph. The builder lets you wire nodes like these from scratch; shown here is one fixed graph — and it's what's running now. Each order lights the path it fired through.";
 const CAP_GATES = "A rule-based strategy: boolean conditions combined with AND / OR gates. This one compiles to real AND/OR bytecode and is what runs when you press Run in this mode. Each order lights the branch it fired.";
 function setMode(mode){
-  if (runBtn.disabled) return;            // don't switch mid-run
+  // Always switch the *visible* graph, even mid-run. The strategy that actually
+  // runs is whatever is selected when Run is pressed; if the user toggles during
+  // a run, note that it takes effect next Run.
   strategyMode = mode;
   const gates = mode === "gates";
   modeGates.classList.toggle("on", gates);
@@ -430,6 +432,7 @@ function setMode(mode){
   wrapGates.style.display = gates ? "" : "none";
   wrapComposite.style.display = gates ? "none" : "";
   gcap.textContent = gates ? CAP_GATES : CAP_COMPOSITE;
+  if (runBtn.disabled) line("[control] switched view — takes effect on the next Run.");
 }
 modeComposite.onclick = () => setMode("composite");
 modeGates.onclick = () => setMode("gates");
